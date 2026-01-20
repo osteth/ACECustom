@@ -188,10 +188,80 @@ namespace ACE.Server.Command.Handlers
             CommandHandlerHelper.WriteOutputInfo(session, NetworkStatistics.Summary(), ChatMessageType.Broadcast);
         }
 
+        [CommandHandler("loadlandblocks", AccessLevel.Developer, CommandHandlerFlag.ConsoleInvoke, 0, "Force load landblocks in a radius around a center point.", "lb_hex radius\nExample: loadlandblocks 0x1234 5\nloadlandblocks random 5")]
+        public static void HandleLoadLandblocks(Session session, params string[] parameters)
+        {
+            if (parameters.Length < 2)
+            {
+                CommandHandlerHelper.WriteOutputInfo(session, "Usage: loadlandblocks <center_lb_hex|random> <radius>");
+                return;
+            }
+
+            // Parse radius and validate
+            if (!int.TryParse(parameters[1], out int radius))
+            {
+                CommandHandlerHelper.WriteOutputInfo(session, "Invalid Radius");
+                return;
+            }
+
+            // Cap radius at 50 to prevent server stalls from pathological values
+            const int MAX_RADIUS = 50;
+            if (radius < 0 || radius > MAX_RADIUS)
+            {
+                CommandHandlerHelper.WriteOutputInfo(session, $"Radius must be between 0 and {MAX_RADIUS}");
+                return;
+            }
+
+            // Parse center landblock
+            LandblockId centerLb;
+            if (parameters[0].Equals("random", StringComparison.OrdinalIgnoreCase))
+            {
+                // Generate random valid landblock X/Y (0-254)
+                var rnd = new Random();
+                centerLb = new LandblockId((byte)rnd.Next(0, 255), (byte)rnd.Next(0, 255));
+            }
+            else
+            {
+                if (!uint.TryParse(parameters[0].Replace("0x", ""), NumberStyles.HexNumber, null, out uint centerLbRaw))
+                {
+                    CommandHandlerHelper.WriteOutputInfo(session, "Invalid Landblock Hex");
+                    return;
+                }
+                centerLb = new LandblockId(centerLbRaw);
+            }
+
+            // Calculate bounds with clamping to valid landblock range [0, 254]
+            int startX = Math.Max(0, centerLb.LandblockX - radius);
+            int endX = Math.Min(254, centerLb.LandblockX + radius);
+            int startY = Math.Max(0, centerLb.LandblockY - radius);
+            int endY = Math.Min(254, centerLb.LandblockY + radius);
+
+            int loadedCount = 0;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            CommandHandlerHelper.WriteOutputInfo(session, $"Starting bulk load of landblocks around {centerLb.Landblock:X4}, Radius: {radius}");
+
+            for (int x = startX; x <= endX; x++)
+            {
+                for (int y = startY; y <= endY; y++)
+                {
+                    var lbId = new LandblockId((byte)x, (byte)y);
+                    
+                    // Trigger load - GetLandblock with permaload=false (normal load)
+                    LandblockManager.GetLandblock(lbId, loadAdjacents: false, variation: null, permaload: false);
+                    loadedCount++;
+                }
+            }
+
+            sw.Stop();
+            CommandHandlerHelper.WriteOutputInfo(session, $"Finished loading {loadedCount} landblocks in {sw.ElapsedMilliseconds}ms.");
+        }
+
         /// <summary>
         /// List all clothing bases which are compatible with setup
         /// </summary>
         [CommandHandler("listcb", AccessLevel.Developer, CommandHandlerFlag.ConsoleInvoke, "List Clothing Tables available")]
+
         public static void HandleShowCompatibleClothingBases(Session session, params string[] parameters)
         {
             uint.TryParse(parameters[0], out var setupId);
@@ -470,7 +540,7 @@ namespace ACE.Server.Command.Handlers
         [CommandHandler("save-now", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, "Saves your session.")]
         public static void HandleSaveNow(Session session, params string[] parameters)
         {
-            session.Player.SavePlayerToDatabase();
+            session.Player.SavePlayerToDatabase(reason: Player.SaveReason.ForcedImmediate);
         }
 
         /// <summary>
@@ -1115,6 +1185,10 @@ namespace ACE.Server.Command.Handlers
 
             if (stuck.Count != 0)
                 session.Network.EnqueueSend(new GameMessageSystemChat($"You cannot spawn {string.Join(", ", stuck.Select(i => i.WeenieClassName))} in your inventory because it cannot be picked up", ChatMessageType.Broadcast));
+
+            // Audit log
+            var itemsCreated = items.Count - stuck.Count;
+            PlayerManager.BroadcastToAuditChannel(session.Player, $"{session.Player.Name} used /cirand to create {itemsCreated} random {weenieType} items");
         }
 
 
@@ -3097,10 +3171,34 @@ namespace ACE.Server.Command.Handlers
             wo.EnqueueBroadcast(new GameMessageScript(wo.Guid, (PlayScript)pscript));
         }
 
-        [CommandHandler("getinfo", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, "Shows basic info for the last appraised object.")]
+        [CommandHandler("getinfo", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, "Shows basic info for the last appraised object, or a weenie by class ID if provided.")]
         public static void HandleGetInfo(Session session, params string[] parameters)
         {
-            var wo = CommandHandlerHelper.GetLastAppraisedObject(session);
+            WorldObject wo = null;
+
+            if (parameters.Length > 0 && !string.IsNullOrWhiteSpace(parameters[0]))
+            {
+                // Try to parse as weenieclassid
+                if (uint.TryParse(parameters[0], out uint weenieClassId))
+                {
+                    wo = WorldObjectFactory.CreateNewWorldObject(weenieClassId);
+                    if (wo == null)
+                    {
+                        session.Network.EnqueueSend(new GameMessageSystemChat($"WeenieClassId {weenieClassId} not found.", ChatMessageType.Broadcast));
+                        return;
+                    }
+                }
+                else
+                {
+                    session.Network.EnqueueSend(new GameMessageSystemChat($"Invalid weenieclassid: {parameters[0]}", ChatMessageType.Broadcast));
+                    return;
+                }
+            }
+            else
+            {
+                // Use last appraised object
+                wo = CommandHandlerHelper.GetLastAppraisedObject(session);
+            }
 
             if (wo != null)
             {
@@ -3114,7 +3212,11 @@ namespace ACE.Server.Command.Handlers
                 {
                     session.Network.EnqueueSend(new GameMessageSystemChat($"Physics Position: {wo.PhysicsObj.Position}", ChatMessageType.Broadcast));
                 }
-            }            
+            }
+            else
+            {
+                session.Network.EnqueueSend(new GameMessageSystemChat("No object found. Appraise an object first or provide a valid weenieclassid.", ChatMessageType.Broadcast));
+            }
         }
 
         public static WorldObject LastTestAim;
@@ -3185,7 +3287,7 @@ namespace ACE.Server.Command.Handlers
             // reload landblock
             var actionChain = new ActionChain();
             actionChain.AddDelayForOneTick();
-            actionChain.AddAction(session.Player, () =>
+            actionChain.AddAction(session.Player, ActionType.Landblock_Init, () =>
             {
                 landblock.Init(variation, true);
             });
@@ -3897,7 +3999,7 @@ namespace ACE.Server.Command.Handlers
                             msg += $"StackSize: {shopItem.StackSize ?? 1} | PaletteTemplate: {(PaletteTemplate)shopItem.PaletteTemplate} ({shopItem.PaletteTemplate}) | Shade: {shopItem.Shade:F3}\n";
                             var soldTimestamp = Time.GetDateTimeFromTimestamp(shopItem.SoldTimestamp ?? 0);
                             msg += $"SoldTimestamp: {soldTimestamp.ToLocalTime()} ({(shopItem.SoldTimestamp.HasValue ? $"{shopItem.SoldTimestamp}" : "NULL")})\n";
-                            var rotTime = soldTimestamp.AddSeconds(PropertyManager.GetDouble("vendor_unique_rot_time"));
+                            var rotTime = soldTimestamp.AddSeconds(ServerConfig.vendor_unique_rot_time.Value);
                             msg += $"RotTimestamp: {rotTime.ToLocalTime()}\n";
                             var payout = vendor.GetBuyCost(shopItem);
                             msg += $"Paid: {payout:N0} {(payout == 1 ? currencyWeenie.GetName() : currencyWeenie.GetPluralName())}\n";

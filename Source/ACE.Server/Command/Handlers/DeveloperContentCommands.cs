@@ -39,6 +39,7 @@ namespace ACE.Server.Command.Handlers.Processors
         {
             Undefined,
             Encounter,
+            Event,
             LandblockInstance,
             Quest,
             Recipe,
@@ -58,6 +59,8 @@ namespace ACE.Server.Command.Handlers.Processors
 
                 if (fileType.StartsWith("landblock"))
                     return FileType.LandblockInstance;
+                else if (fileType.StartsWith("event"))
+                    return FileType.Event;
                 else if (fileType.StartsWith("quest"))
                     return FileType.Quest;
                 else if (fileType.StartsWith("recipe"))
@@ -74,6 +77,8 @@ namespace ACE.Server.Command.Handlers.Processors
         {
             if (param.StartsWith("landblock"))
                 return FileType.LandblockInstance;
+            else if (param.StartsWith("event"))
+                return FileType.Event;
             else if (param.StartsWith("quest"))
                 return FileType.Quest;
             else if (param.StartsWith("recipe"))
@@ -265,6 +270,10 @@ namespace ACE.Server.Command.Handlers.Processors
                         ImportSQLLandblock(session, param);
                         break;
 
+                    case FileType.Event:
+                        ImportSQLEvent(session, param);
+                        break;
+
                     case FileType.Quest:
                         ImportSQLQuest(session, param);
                         break;
@@ -403,6 +412,34 @@ namespace ACE.Server.Command.Handlers.Processors
                 ImportSQLQuest(session, sql_folder, file.Name);
         }
 
+        public static void ImportSQLEvent(Session session, string eventName)
+        {
+            DirectoryInfo di = VerifyContentFolder(session);
+            if (!di.Exists) return;
+
+            var sep = Path.DirectorySeparatorChar;
+
+            var sql_folder = $"{di.FullName}{sep}sql{sep}events{sep}";
+
+            var prefix = eventName;
+
+            if (eventName.Equals("all", StringComparison.OrdinalIgnoreCase))
+                prefix = "";
+
+            di = new DirectoryInfo(sql_folder);
+
+            var files = di.Exists ? di.GetFiles($"{prefix}*.sql") : null;
+
+            if (files == null || files.Length == 0)
+            {
+                CommandHandlerHelper.WriteOutputInfo(session, $"Couldn't find {sql_folder}{prefix}*.sql");
+                return;
+            }
+
+            foreach (var file in files)
+                ImportSQLEvent(session, sql_folder, file.Name);
+        }
+
         public static void ImportSQLSpell(Session session, string spellId)
         {
             DirectoryInfo di = VerifyContentFolder(session);
@@ -436,7 +473,7 @@ namespace ACE.Server.Command.Handlers.Processors
         /// </summary>
         private static DirectoryInfo VerifyContentFolder(Session session, bool showError = true)
         {
-            var content_folder = PropertyManager.GetString("content_folder");
+            var content_folder = ServerConfig.content_folder.Value;
 
             var sep = Path.DirectorySeparatorChar;
 
@@ -803,6 +840,7 @@ namespace ACE.Server.Command.Handlers.Processors
         }
 
         public static QuestSQLWriter QuestSQLWriter;
+        public static EventSQLWriter EventSQLWriter;
 
         public static string json2sql_quest(Session session, string folder, string json_filename)
         {
@@ -958,6 +996,23 @@ namespace ACE.Server.Command.Handlers.Processors
 
             // convert to json file
             sql2json_quest(session, quest, sql_folder, sql_file);
+        }
+
+        private static void ImportSQLEvent(Session session, string sql_folder, string sql_file)
+        {
+            // import sql to db
+            ImportSQL(sql_folder + sql_file);
+            CommandHandlerHelper.WriteOutputInfo(session, $"Imported {sql_file}");
+
+            // clear cached event
+            var eventName = sql_file.TrimEnd(".sql");
+            DatabaseManager.World.ClearCachedEvent(eventName);
+
+            // load event from db
+            var evt = DatabaseManager.World.GetCachedEvent(eventName);
+
+            if (evt != null)
+                CommandHandlerHelper.WriteOutputInfo(session, $"Event '{eventName}' reloaded into cache");
         }
 
         private static void ImportSQLSpell(Session session, string sql_folder, string sql_file)
@@ -1552,6 +1607,11 @@ namespace ACE.Server.Command.Handlers.Processors
             PlayerManager.BroadcastToAuditChannel(session.Player, $"{session.Player.Name} has removed {(instance.IsLinkChild ? "child " : "")}[WeenieID]: {wo.WeenieClassId} - {wo.Name} [GUID]: (0x{guid:X8}) from landblock instances");
         }
 
+        /// <summary>
+        /// Saves a LandblockInstance to the World database.
+        /// WARNING: This is one of the few places where World database writes occur.
+        /// World database entities are generally read-only except through admin commands.
+        /// </summary>
         public static void SaveInstanceToWorldDatabase(LandblockInstance instance)
         {
             try
@@ -1569,6 +1629,11 @@ namespace ACE.Server.Command.Handlers.Processors
 
         }
 
+        /// <summary>
+        /// Deletes a LandblockInstance from the World database.
+        /// WARNING: This is one of the few places where World database writes occur.
+        /// World database entities are generally read-only except through admin commands.
+        /// </summary>
         public static void DeleteInstanceFromWorldDatabase(LandblockInstance instance)
         {
             try
@@ -1585,6 +1650,11 @@ namespace ACE.Server.Command.Handlers.Processors
             }
         }
 
+        /// <summary>
+        /// Updates a LandblockInstance in the World database.
+        /// WARNING: This is one of the few places where World database writes occur.
+        /// World database entities are generally read-only except through admin commands.
+        /// </summary>
         public static void UpdateInstanceInWorldDatabase(LandblockInstance instance)
         {
             try
@@ -1748,9 +1818,9 @@ namespace ACE.Server.Command.Handlers.Processors
                 return null;
             }
 
-            if (PropertyManager.GetBool("override_encounter_spawn_rates"))
+            if (ServerConfig.override_encounter_spawn_rates.Value)
             {
-                wo.RegenerationInterval = PropertyManager.GetDouble("encounter_regen_interval");
+                wo.RegenerationInterval = ServerConfig.encounter_regen_interval.Value;
 
                 wo.ReinitializeHeartbeats();
 
@@ -2329,6 +2399,15 @@ namespace ACE.Server.Command.Handlers.Processors
                 }
             }
 
+            if (parameters[0].ToLower().Contains("event"))
+            {
+                contentType = FileType.Event;
+                if (parameters.Length > 1)
+                {
+                    param = parameters[1];
+                }
+            }
+
             if (parameters[0].ToLower().Contains("quest"))
             {
                 contentType = FileType.Quest;
@@ -2360,6 +2439,10 @@ namespace ACE.Server.Command.Handlers.Processors
             {
                 case FileType.LandblockInstance:
                     ExportDiscordLandblock(session, param);
+                    break;
+
+                case FileType.Event:
+                    ExportDiscordEvent(session, param);
                     break;
 
                 case FileType.Quest:
@@ -2407,6 +2490,10 @@ namespace ACE.Server.Command.Handlers.Processors
             {
                 case FileType.LandblockInstance:
                     ExportSQLLandblock(session, param);
+                    break;
+
+                case FileType.Event:
+                    ExportSQLEvent(session, param);
                     break;
 
                 case FileType.Quest:
@@ -2893,6 +2980,53 @@ namespace ACE.Server.Command.Handlers.Processors
             //CommandHandlerHelper.WriteOutputInfo(session, $"Exported {sql_folder}{sql_filename}");
         }
 
+        public static void ExportDiscordEvent(Session session, string eventName)
+        {
+            // Get the event from the database by name
+            var events = DatabaseManager.World.GetAllEvents();
+            var evt = events?.FirstOrDefault(e => e.Name.Equals(eventName, StringComparison.OrdinalIgnoreCase));
+
+            if (evt == null)
+            {
+                CommandHandlerHelper.WriteOutputInfo(session, $"Couldn't find event {eventName}");
+                return;
+            }
+
+            if (EventSQLWriter == null)
+                EventSQLWriter = new EventSQLWriter();
+
+            var sql_filename = eventName + ".sql";
+
+            try
+            {
+                using (MemoryStream mem = new MemoryStream())
+                {
+                    using (StreamWriter sw = new StreamWriter(mem))
+                    {
+                        sw.AutoFlush = true;
+
+                        EventSQLWriter.CreateSQLDELETEStatement(evt, sw);
+                        sw.WriteLine();
+
+                        EventSQLWriter.CreateSQLINSERTStatement(evt, sw);
+
+                        String result = System.Text.Encoding.UTF8.GetString(mem.ToArray(), 0, (int)mem.Length);
+
+                        DiscordChatManager.SendDiscordFile(session.Player.Name, sql_filename,
+                            ConfigManager.Config.Chat.ExportsChannelId, new Discord.FileAttachment(mem, sql_filename));
+                        sw.Close();
+                        CommandHandlerHelper.WriteOutputInfo(session, $"Exported {sql_filename} to Discord");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                CommandHandlerHelper.WriteOutputInfo(session, $"Failed to export {sql_filename}");
+                return;
+            }
+        }
+
         public static void ExportSQLQuest(Session session, string questName)
         {
             DirectoryInfo di = VerifyContentFolder(session, false);
@@ -2927,6 +3061,55 @@ namespace ACE.Server.Command.Handlers.Processors
                 sqlFile.WriteLine();
 
                 QuestSQLWriter.CreateSQLINSERTStatement(quest, sqlFile);
+
+                sqlFile.Close();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                CommandHandlerHelper.WriteOutputInfo(session, $"Failed to export {sql_folder}{sql_filename}");
+                return;
+            }
+
+            CommandHandlerHelper.WriteOutputInfo(session, $"Exported {sql_folder}{sql_filename}");
+        }
+
+        public static void ExportSQLEvent(Session session, string eventName)
+        {
+            DirectoryInfo di = VerifyContentFolder(session, false);
+
+            var sep = Path.DirectorySeparatorChar;
+
+            // Get the event from the database by name
+            var events = DatabaseManager.World.GetAllEvents();
+            var evt = events?.FirstOrDefault(e => e.Name.Equals(eventName, StringComparison.OrdinalIgnoreCase));
+
+            if (evt == null)
+            {
+                CommandHandlerHelper.WriteOutputInfo(session, $"Couldn't find event {eventName}");
+                return;
+            }
+
+            var sql_folder = $"{di.FullName}{sep}sql{sep}events{sep}";
+
+            di = new DirectoryInfo(sql_folder);
+
+            if (!di.Exists)
+                di.Create();
+
+            if (EventSQLWriter == null)
+                EventSQLWriter = new EventSQLWriter();
+
+            var sql_filename = eventName + ".sql";
+
+            try
+            {
+                var sqlFile = new StreamWriter(sql_folder + sql_filename);
+
+                EventSQLWriter.CreateSQLDELETEStatement(evt, sqlFile);
+                sqlFile.WriteLine();
+
+                EventSQLWriter.CreateSQLINSERTStatement(evt, sqlFile);
 
                 sqlFile.Close();
             }
@@ -3094,16 +3277,20 @@ namespace ACE.Server.Command.Handlers.Processors
                     mode = CacheType.DeathTreasure;
             }
 
+            var clearedCaches = new List<string>();
+
             if (mode.HasFlag(CacheType.Landblock))
             {
                 CommandHandlerHelper.WriteOutputInfo(session, "Clearing landblock instance cache");
                 DatabaseManager.World.ClearCachedLandblockInstances();
+                clearedCaches.Add("Landblock");
             }
 
             if (mode.HasFlag(CacheType.Recipe))
             {
                 CommandHandlerHelper.WriteOutputInfo(session, "Clearing recipe cache");
                 DatabaseManager.World.ClearCookbookCache();
+                clearedCaches.Add("Recipe");
             }
 
             if (mode.HasFlag(CacheType.Spell))
@@ -3111,30 +3298,42 @@ namespace ACE.Server.Command.Handlers.Processors
                 CommandHandlerHelper.WriteOutputInfo(session, "Clearing spell cache");
                 DatabaseManager.World.ClearSpellCache();
                 WorldObject.ClearSpellCache();
+                clearedCaches.Add("Spell");
             }
 
             if (mode.HasFlag(CacheType.Weenie))
             {
                 CommandHandlerHelper.WriteOutputInfo(session, "Clearing weenie cache");
                 DatabaseManager.World.ClearWeenieCache();
+                clearedCaches.Add("Weenie");
             }
 
             if (mode.HasFlag(CacheType.DeathTreasure))
             {
                 CommandHandlerHelper.WriteOutputInfo(session, "Clearing treasure death cache");
                 DatabaseManager.World.ClearDeathTreasureCache();
+                clearedCaches.Add("DeathTreasure");
             }
 
             if (mode.HasFlag(CacheType.WieldedTreasure))
             {
                 CommandHandlerHelper.WriteOutputInfo(session, "Clearing wielded treasure cache");
                 DatabaseManager.World.ClearWieldedTreasureCache();
+                clearedCaches.Add("WieldedTreasure");
             }
 
             if (mode.HasFlag(CacheType.Quests))
             {
                 CommandHandlerHelper.WriteOutputInfo(session, "Clearing quest cache");
                 DatabaseManager.World.ClearAllCachedQuests();
+                clearedCaches.Add("Quests");
+            }
+
+            // Log to audit channel
+            if (clearedCaches.Count > 0 && session?.Player != null)
+            {
+                var cacheList = string.Join(", ", clearedCaches);
+                PlayerManager.BroadcastToAuditChannel(session.Player, $"{session.Player.Name} used /clearcache to clear: {cacheList}");
             }
         }
 

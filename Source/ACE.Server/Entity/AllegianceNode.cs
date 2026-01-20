@@ -54,8 +54,7 @@ namespace ACE.Server.Entity
 
         public void BuildChain(Allegiance allegiance, List<IPlayer> players, Dictionary<uint, List<IPlayer>> patronVassals, HashSet<uint> visited = null)
         {
-            if (visited == null)
-                visited = new HashSet<uint>();
+            visited ??= [];
 
             if (visited.Contains(PlayerGuid.Full))
             {
@@ -104,7 +103,7 @@ namespace ACE.Server.Entity
 
                         Vassals.Add(vassal.Guid.Full, node);
                     }
-                    catch (Exception ex)
+                    catch
                     {
                         Console.WriteLine($"Allegiance crashed: {allegiance.Name}, player: {vassal.Name}, monarch: {Monarch.Player.Name}");
                         return;
@@ -154,18 +153,19 @@ namespace ACE.Server.Entity
 
         public void OnLevelUp()
         {
+            // Removed level requirement check - no longer needed since passup works regardless of level
             // patron = self node
-            var patronLevel = Player.Level ?? 1;
+            //var patronLevel = Player.Level ?? 1;
 
             // find vassals who are not passing xp
-            foreach (var vassal in Vassals.Values.Where(i => !i.Player.ExistedBeforeAllegianceXpChanges))
-            {
-                var vassalLevel = vassal.Player.Level ?? 1;
+            //foreach (var vassal in Vassals.Values.Where(i => !i.Player.ExistedBeforeAllegianceXpChanges))
+            //{
+            //    var vassalLevel = vassal.Player.Level ?? 1;
 
-                // check if vassal now meets criteria for passing xp
-                if (patronLevel >= vassalLevel)
-                    vassal.Player.ExistedBeforeAllegianceXpChanges = true;
-            }
+            //    // check if vassal now meets criteria for passing xp
+            //    if (patronLevel >= vassalLevel)
+            //        vassal.Player.ExistedBeforeAllegianceXpChanges = true;
+            //}
         }
     }
 }

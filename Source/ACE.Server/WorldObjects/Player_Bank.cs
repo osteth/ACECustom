@@ -142,7 +142,7 @@ namespace ACE.Server.WorldObjects
         /// <summary>
         /// Deposit all pyreals
         /// </summary>
-        public void DepositPyreals(bool suppressChat = false)
+        public void DepositPyreals(bool suppressChat = false, bool suppressSave = false)
         {
             LogAndPrint($"[BANK_DEBUG] Player: {Name} | Starting DepositPyreals operation");
             
@@ -189,7 +189,7 @@ namespace ACE.Server.WorldObjects
         /// Deposit specified amount of pyreals
         /// </summary>
         /// <param name="Amount"></param>
-        public void DepositPyreals(long Amount, bool suppressChat = false)
+        public void DepositPyreals(long Amount, bool suppressChat = false, bool suppressSave = false)
         {
             log.Debug($"[BANK_DEBUG] Player: {Name} | Starting DepositPyreals(Amount: {Amount:N0}) operation");
             
@@ -202,10 +202,10 @@ namespace ACE.Server.WorldObjects
             long oldBalance = BankedPyreals ?? 0;
             log.Info($"[BANK_DEBUG] Player: {Name} | Current BankedPyreals: {oldBalance:N0} | Requested Amount: {Amount:N0}");
             
+            long totalDeposited = 0;
             lock (balanceLock)
             {
                 var pyrealsList = this.GetInventoryItemsOfWCID(273);
-                long totalDeposited = 0;
                 var itemsToRemove = new List<WorldObject>();
                 
                 log.Debug($"[BANK_DEBUG] Player: {Name} | Found {pyrealsList.Count} pyreal items for specific amount deposit");
@@ -270,18 +270,24 @@ namespace ACE.Server.WorldObjects
                     log.Debug($"[BANK_DEBUG] Player: {Name} | No pyreals were deposited");
                     Session.Network.EnqueueSend(new GameMessageSystemChat("No pyreals found to deposit", ChatMessageType.System));
                 }
-            }          
+            }
+            
+            // Force save after bank deposit
+            if (!suppressSave && totalDeposited > 0)
+            {
+                SavePlayerToDatabase();
+            }
         }
 
-        public void DepositLegendaryKeys(bool suppressChat = false)
+        public void DepositLegendaryKeys(bool suppressChat = false, bool suppressSave = false)
         {
             if (BankedLegendaryKeys == null)
             {
                 BankedLegendaryKeys = 0;
             }
+            long totalDeposited = 0;
             lock (balanceLock)
             {
-                long totalDeposited = 0;
                 var itemsToRemove = new List<WorldObject>();
                 
                 //int i = 0;
@@ -378,17 +384,23 @@ namespace ACE.Server.WorldObjects
                     }
                 }
             }
+            
+            // Force save after bank deposit
+            if (!suppressSave && totalDeposited > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+            }
         }
 
-        public void DepositMythicalKeys(bool suppressChat = false)
+        public void DepositMythicalKeys(bool suppressChat = false, bool suppressSave = false)
         {
             if (BankedMythicalKeys == null)
             {
                 BankedMythicalKeys = 0;
             }
+            long totalDeposited = 0;
             lock (balanceLock)
             {
-                long totalDeposited = 0;
                 var itemsToRemove = new List<WorldObject>();
                 
                 //int i = 0;
@@ -486,9 +498,15 @@ namespace ACE.Server.WorldObjects
                     }
                 }
             }
+            
+            // Force save after bank deposit
+            if (!suppressSave && totalDeposited > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+            }
         }
 
-        public void DepositPeas(bool suppressChat = false)
+        public void DepositPeas(bool suppressChat = false, bool suppressSave = false)
         {
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             LogAndPrint($"[BANK_DEBUG] Player: {Name} | Starting DepositPeas operation with performance improvements");
@@ -502,9 +520,9 @@ namespace ACE.Server.WorldObjects
             long oldBalance = BankedPyreals ?? 0;
             log.Info($"[BANK_DEBUG] Player: {Name} | Current BankedPyreals: {oldBalance:N0}");
             
+            long totalDeposited = 0;
             lock (balanceLock)
             {
-                long totalDeposited = 0;
                 
                 // Single comprehensive scan: Get ALL items from main pack + side containers using iterative DFS
                 var allItems = new List<WorldObject>();
@@ -695,17 +713,23 @@ namespace ACE.Server.WorldObjects
                     }
                 }
             }
+            
+            // Force save after bank deposit
+            if (!suppressSave && totalDeposited > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+            }
         }
 
-        public void DepositEnlightenedCoins(bool suppressChat = false)
+        public void DepositEnlightenedCoins(bool suppressChat = false, bool suppressSave = false)
         {
             if (BankedEnlightenedCoins == null)
             {
                 BankedEnlightenedCoins = 0;
             }
+            long totalDeposited = 0;
             lock (balanceLock)
             {
-                long totalDeposited = 0;
                 //int i = 0;
                 var EnlList = this.GetInventoryItemsOfWCID(300004);
                 foreach (var coin in EnlList)
@@ -734,18 +758,20 @@ namespace ACE.Server.WorldObjects
                 }
             }
 
-            this.SavePlayerToDatabase();
+            // Force save after bank deposit
+            if (!suppressSave && totalDeposited > 0)
+                SavePlayerToDatabase();
         }
 
-        public void DepositWeaklyEnlightenedCoins(bool suppressChat = false)
+        public void DepositWeaklyEnlightenedCoins(bool suppressChat = false, bool suppressSave = false)
         {
             if (BankedWeaklyEnlightenedCoins == null)
             {
                 BankedWeaklyEnlightenedCoins = 0;
             }
+            long totalDeposited = 0;
             lock (balanceLock)
             {
-                long totalDeposited = 0;
                 //int i = 0;
                 var WeakEnlList = this.GetInventoryItemsOfWCID(300003);
                 foreach (var coin in WeakEnlList)
@@ -774,14 +800,16 @@ namespace ACE.Server.WorldObjects
                 }
             }
 
-            this.SavePlayerToDatabase();
+            // Force save after bank deposit
+            if (!suppressSave && totalDeposited > 0)
+                SavePlayerToDatabase();
         }
 
 
         /// <summary>
         /// Deposit all luminance
         /// </summary>
-        public void DepositLuminance(bool suppressChat = false)
+        public void DepositLuminance(bool suppressChat = false, bool suppressSave = false)
         {
             long availableLuminance = this.AvailableLuminance ?? 0;
             if (availableLuminance > 0)
@@ -799,7 +827,7 @@ namespace ACE.Server.WorldObjects
         /// Deposit specified amount of luminance
         /// </summary>
         /// <param name="Amount"></param>
-        public void DepositLuminance(long Amount, bool suppressChat = false)
+        public void DepositLuminance(long Amount, bool suppressChat = false, bool suppressSave = false)
         {
             if (Amount <= 0)
             {
@@ -850,20 +878,26 @@ namespace ACE.Server.WorldObjects
             
             Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.AvailableLuminance, this.AvailableLuminance ?? 0));
             //Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.BankedLuminance, this.BankedLuminance ?? 0));
+            
+            // Force save after bank deposit
+            if (actualAmount > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+            }
         }
 
         /// <summary>
         /// Deposits all trade notes
         /// </summary>
-        public void DepositTradeNotes(bool suppressChat = false)
+        public void DepositTradeNotes(bool suppressChat = false, bool suppressSave = false)
         {
             if (BankedPyreals == null)
             {
                 BankedPyreals = 0;
             }
+            long totalDeposited = 0;
             lock(balanceLock)
             {
-                long totalDeposited = 0;
                 var notesList = this.GetTradeNotes();
                 var itemsToRemove = new List<WorldObject>();
                 
@@ -901,6 +935,12 @@ namespace ACE.Server.WorldObjects
                         Session.Network.EnqueueSend(new GameMessageSystemChat("No trade notes found to deposit", ChatMessageType.System));
                     }
                 }
+            }
+            
+            // Force save after bank deposit
+            if (!suppressSave && totalDeposited > 0)
+            {
+                SavePlayerToDatabase();
             }
         }
 
@@ -957,6 +997,12 @@ namespace ACE.Server.WorldObjects
             }
             
             Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.AvailableLuminance, this.AvailableLuminance ?? 0));
+            
+            // Force save after bank withdrawal
+            if (actualWithdraw > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+            }
         }
 
         private void BatchRemoveItems(List<WorldObject> itemsToRemove)
@@ -1091,6 +1137,9 @@ namespace ACE.Server.WorldObjects
                     log.Debug($"[BANK_DEBUG] Player: {Name} | Partial withdrawal | Created: {successfullyCreated:N0} | Remaining: {remaining:N0} (insufficient pack space)");
                     Session.Network.EnqueueSend(new GameMessageSystemChat($"Withdrew {successfullyCreated:N0} pyreals (partial - insufficient pack space for remaining {remaining:N0} pyreals)", ChatMessageType.System));
                 }
+                
+                // Force save after bank withdrawal
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
             }
             else
             {
@@ -1099,6 +1148,12 @@ namespace ACE.Server.WorldObjects
             }
         }
 
+        /// <summary>
+        /// Creates a legendary key and decrements the banked balance.
+        /// WARNING: This method modifies BankedLegendaryKeys directly.
+        /// Must be called from within balanceLock to ensure thread safety.
+        /// The caller is responsible for saving after balance changes.
+        /// </summary>
         private bool CreateLegendaryKey(uint weenieClassId, byte uses)
         {
             WorldObject key = WorldObjectFactory.CreateNewWorldObject(weenieClassId);
@@ -1107,6 +1162,7 @@ namespace ACE.Server.WorldObjects
             var itemCreated = this.TryCreateInInventoryWithNetworking(key);
             if (itemCreated)
             {
+                // Balance change: caller must ensure save happens
                 BankedLegendaryKeys -= uses;
                 return true;
             }
@@ -1121,6 +1177,7 @@ namespace ACE.Server.WorldObjects
                 return;
             }
 
+            long totalWithdrawn = 0;
             lock (balanceLock)
             {
                 // Check if player has enough legendary keys
@@ -1131,7 +1188,6 @@ namespace ACE.Server.WorldObjects
                 }
                 
                 long remainingAmount = Amount;
-                long totalWithdrawn = 0;
                 int keys25Created = 0;
                 int keys10Created = 0;
                 int keys1Created = 0;
@@ -1198,8 +1254,20 @@ namespace ACE.Server.WorldObjects
                     Session.Network.EnqueueSend(new GameMessageSystemChat($"Warning: Requested {Amount:N0} legendary keys but only {totalWithdrawn:N0} was withdrawn.", ChatMessageType.System));
                 }
             }
+            
+            // Force save after bank withdrawal
+            if (totalWithdrawn > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+            }
         }
 
+        /// <summary>
+        /// Creates a mythical key and decrements the banked balance.
+        /// WARNING: This method modifies BankedMythicalKeys directly.
+        /// Must be called from within balanceLock to ensure thread safety.
+        /// The caller is responsible for saving after balance changes.
+        /// </summary>
         private bool CreateMythicalKey(uint weenieClassId, byte uses)
         {
             WorldObject key = WorldObjectFactory.CreateNewWorldObject(weenieClassId);
@@ -1208,6 +1276,7 @@ namespace ACE.Server.WorldObjects
             var itemCreated = this.TryCreateInInventoryWithNetworking(key);
             if (itemCreated)
             {
+                // Balance change: caller must ensure save happens
                 BankedMythicalKeys -= uses;
                 return true;
             }
@@ -1222,6 +1291,7 @@ namespace ACE.Server.WorldObjects
                 return;
             }
 
+            long totalWithdrawn = 0;
             lock (balanceLock)
             {
                 // Check if player has enough mythical keys
@@ -1232,7 +1302,6 @@ namespace ACE.Server.WorldObjects
                 }
                 
                 long remainingAmount = Amount;
-                long totalWithdrawn = 0;
                 int keys25Created = 0;
                 int keys10Created = 0;
                 int keys1Created = 0;
@@ -1298,6 +1367,12 @@ namespace ACE.Server.WorldObjects
                 {
                     Session.Network.EnqueueSend(new GameMessageSystemChat($"Warning: Requested {Amount:N0} mythical keys but only {totalWithdrawn:N0} was withdrawn.", ChatMessageType.System));
                 }
+            }
+            
+            // Force save after bank withdrawal
+            if (totalWithdrawn > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
             }
         }
 
@@ -1397,6 +1472,12 @@ namespace ACE.Server.WorldObjects
             {
                 Session.Network.EnqueueSend(new GameMessageSystemChat("Failed to create enlightened coins - check pack space. Withdrawal cancelled.", ChatMessageType.System));
             }
+            
+            // Force save after bank withdrawal
+            if (successfullyCreated > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+            }
         }
 
         /// <summary>
@@ -1495,6 +1576,12 @@ namespace ACE.Server.WorldObjects
             {
                 Session.Network.EnqueueSend(new GameMessageSystemChat("Failed to create weakly enlightened coins - check pack space. Withdrawal cancelled.", ChatMessageType.System));
             }
+            
+            // Force save after bank withdrawal
+            if (successfullyCreated > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+            }
         }
 
         /// <summary>
@@ -1522,6 +1609,7 @@ namespace ACE.Server.WorldObjects
                 return;
             }
 
+            int created = 0;
             lock (balanceLock)
             {
                 uint weenieId = 0;
@@ -1596,7 +1684,6 @@ namespace ACE.Server.WorldObjects
                 }
 
                 var remaining = count;
-                var created = 0;
                 // Use different stack sizes based on denomination
                 int maxStack = denomination.Trim().ToLower() == "mmd" ? MMD_TRADE_NOTE_MAX_STACK : TRADE_NOTE_MAX_STACK;
                 // Validate against actual item data
@@ -1635,6 +1722,12 @@ namespace ACE.Server.WorldObjects
                     if (created != count)
                         Session.Network.EnqueueSend(new GameMessageSystemChat($"Warning: Requested {count} notes but only {created} were created.", ChatMessageType.System));
                 }
+            }
+            
+            // Force save after bank withdrawal
+            if (created > 0)
+            {
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
             }
         }
 
@@ -1764,6 +1857,14 @@ namespace ACE.Server.WorldObjects
                 LogTransfer("TransferPyreals", "Pyreals", Amount, CharacterDestination, true, "Transfer completed successfully");
                 
                 log.Info($"[BANK_DEBUG] Player: {Name} | Transfer completed | Source new balance: {newBalance:N0} | Target new balance: {targetNewBalance:N0}");
+                
+                // Force save for both players after bank transfer
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+                if (tarplayer is Player targetPlayer)
+                {
+                    targetPlayer.SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+                }
+                
                 return true;
             }
             catch (Exception ex)
@@ -1851,6 +1952,13 @@ namespace ACE.Server.WorldObjects
                 // Log the transfer
                 TransferLogger.LogBankTransfer(this, CharacterDestination, "Legendary Keys", Amount, TransferLogger.TransferTypeBankTransfer);
                 
+                // Force save for both players after bank transfer
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+                if (tarplayer is Player targetPlayer)
+                {
+                    targetPlayer.SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+                }
+                
                 return true;
             }
         }
@@ -1926,17 +2034,13 @@ namespace ACE.Server.WorldObjects
                     // Send notification outside of locks
                     onlinePlayer.Session.Network.EnqueueSend(new GameMessageSystemChat($"Received {Amount:N0} Mythical Keys from {this.Name}", ChatMessageType.System));
                     Session.Network.EnqueueSend(new GameMessageSystemChat($"Transferred {Amount:N0} Mythical Keys to {onlinePlayer.Name}", ChatMessageType.System));
-                    // Persist to database for significant transfers (performance optimization)
-                    if (Amount > 1)
-                    {
-                        onlinePlayer.SavePlayerToDatabase();
-                    }
                 }
-                //Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.BankedMythicalKeys, this.BankedMythicalKeys ?? 0));
-                // Persist to database for significant transfers (performance optimization)
-                if (Amount > 1)
+                
+                // Force save for both players after bank transfer
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+                if (tarplayer is Player targetPlayer)
                 {
-                    this.SavePlayerToDatabase();
+                    targetPlayer.SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
                 }
 
                 // Log the transfer
@@ -2030,18 +2134,13 @@ namespace ACE.Server.WorldObjects
                     onlinePlayer.Session.Network.EnqueueSend(new GameMessageSystemChat($"Received {Amount:N0} luminance from {this.Name}", ChatMessageType.System));
                     Session.Network.EnqueueSend(new GameMessageSystemChat($"Transferred {Amount:N0} Luminance to {onlinePlayer.Name}", ChatMessageType.System));
                     
-                    // Persist to database for significant transfers (performance optimization)
-                    if (Amount > 100000)
-                    {
-                        onlinePlayer.SavePlayerToDatabase();
-                    }
                 }
                 
-                //Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.BankedLuminance, this.BankedLuminance ?? 0));
-                // Persist to database for significant transfers (performance optimization)
-                if (Amount > 100000)
+                // Force save for both players after bank transfer
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+                if (tarplayer is Player targetPlayer)
                 {
-                    this.SavePlayerToDatabase();
+                    targetPlayer.SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
                 }
             
             // Log the transfer
@@ -2120,17 +2219,13 @@ namespace ACE.Server.WorldObjects
                     // Send notification outside of locks
                     onlinePlayer.Session.Network.EnqueueSend(new GameMessageSystemChat($"Received {Amount:N0} Enlightened Coins from {this.Name}", ChatMessageType.System));
                     Session.Network.EnqueueSend(new GameMessageSystemChat($"Transferred {Amount:N0} Enlightened Coins to {onlinePlayer.Name}", ChatMessageType.System));
-                    // Persist to database for significant transfers (performance optimization)
-                    if (Amount > 10)
-                    {
-                        onlinePlayer.SavePlayerToDatabase();
-                    }
                 }
-                //Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.BankedEnlightenedCoins, this.BankedEnlightenedCoins ?? 0));
-                // Persist to database for significant transfers (performance optimization)
-                if (Amount > 10)
+                
+                // Force save for both players after bank transfer
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+                if (tarplayer is Player targetPlayer)
                 {
-                    this.SavePlayerToDatabase();
+                    targetPlayer.SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
                 }
                 
                 // Log the transfer
@@ -2210,17 +2305,13 @@ namespace ACE.Server.WorldObjects
                     // Send notification outside of locks
                     onlinePlayer.Session.Network.EnqueueSend(new GameMessageSystemChat($"Received {Amount:N0} Weakly Enlightened Coins from {this.Name}", ChatMessageType.System));
                     Session.Network.EnqueueSend(new GameMessageSystemChat($"Transferred {Amount:N0} Weakly Enlightened Coins to {onlinePlayer.Name}", ChatMessageType.System));
-                    // Persist to database for significant transfers (performance optimization)
-                    if (Amount > 10)
-                    {
-                        onlinePlayer.SavePlayerToDatabase();
-                    }
                 }
-                //Session.Network.EnqueueSend(new GameMessagePrivateUpdatePropertyInt64(this, PropertyInt64.BankedWeaklyEnlightenedCoins, this.BankedWeaklyEnlightenedCoins ?? 0));
-                // Persist to database for significant transfers (performance optimization)
-                if (Amount > 10)
+                
+                // Force save for both players after bank transfer
+                SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
+                if (tarplayer is Player targetPlayer)
                 {
-                    this.SavePlayerToDatabase();
+                    targetPlayer.SavePlayerToDatabase(reason: SaveReason.ForcedImmediate);
                 }
                 
                 // Log the transfer

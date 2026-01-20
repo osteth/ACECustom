@@ -62,9 +62,31 @@ namespace ACE.Server.Managers
 
         public static void Initialize()
         {
+            // CRITICAL: Register callback factory with SaveScheduler as the FIRST thing in initialization
+            // This must be set before any saves can be requested, as SaveScheduler relies on it for
+            // thread-safe callback execution on the world thread (e.g., login drain callbacks)
+            if (SaveScheduler.EnqueueToWorldThread != null)
+            {
+                log.Warn("[WORLDMANAGER] SaveScheduler.EnqueueToWorldThread was already set - this should not happen");
+            }
+            
+            SaveScheduler.EnqueueToWorldThread = (action) =>
+            {
+                ActionQueue.EnqueueAction(new ActionEventDelegate(
+                    ActionType.ControlFlowDelay,
+                    action));
+            };
+            
+            log.Debug("[WORLDMANAGER] SaveScheduler.EnqueueToWorldThread initialized");
+
+            // Wire up SerializedShardDatabase hooks to avoid circular dependencies
+            SerializedShardDatabase.EnqueueToWorldThread = SaveScheduler.EnqueueToWorldThread;
+            SerializedShardDatabase.PerformOfflinePlayerSavesHook = PlayerManager.PerformOfflinePlayerSaves;
+            
+            log.Debug("[WORLDMANAGER] SerializedShardDatabase hooks initialized");
+
             var thread = new Thread(() =>
             {
-                LandblockManager.PreloadConfigLandblocks();
                 UpdateWorld();
             });
             thread.Name = "World Manager";
@@ -73,7 +95,7 @@ namespace ACE.Server.Managers
             log.DebugFormat("ServerTime initialized to {0}", Timers.WorldStartLoreTime);
             log.DebugFormat($"Current maximum allowed sessions: {ConfigManager.Config.Server.Network.MaximumAllowedSessions}");
 
-            log.Info($"World started and is currently {WorldStatus.ToString()}{(PropertyManager.GetBool("world_closed", false) ? "" : " and will open automatically when server startup is complete.")}");
+            log.Info($"World started and is currently {WorldStatus.ToString()}{(ServerConfig.world_closed.Value ? "" : " and will open automatically when server startup is complete.")}");
             if (WorldStatus == WorldStatusState.Closed)
                 log.Info($"To open world to players, use command: world open");
         }
@@ -97,62 +119,95 @@ namespace ACE.Server.Managers
                 PlayerManager.BootAllPlayers();
         }
 
-        public static void PlayerEnterWorld(Session session, LoginCharacter character, int loginRetryCount = 0)
+        public static void PlayerEnterWorld(Session session, LoginCharacter character)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            log.Debug($"[LOGIN_FLOW] PlayerEnterWorld started for {character.Name} (0x{character.Id:X8})");
+
             var offlinePlayer = PlayerManager.GetOfflinePlayer(character.Id);
 
             if (offlinePlayer == null)
             {
-                log.Error($"PlayerEnterWorld requested for character.Id 0x{character.Id:X8} not found in PlayerManager OfflinePlayers.");
+                log.Error($"[LOGIN_FLOW] {sw.ElapsedMilliseconds}ms - PlayerEnterWorld requested for character.Id 0x{character.Id:X8} not found in PlayerManager OfflinePlayers.");
                 return;
             }
 
-            if (offlinePlayer.SaveInProgress)
+            // Clear abandoned SaveInProgress from previous server boots before checking
+            if (offlinePlayer.SaveInProgress &&
+                offlinePlayer.SaveServerBootId != ServerRuntime.BootId)
             {
-                const int MAX_LOGIN_RETRIES = 10;
-                if (loginRetryCount >= MAX_LOGIN_RETRIES)
-                {
-                    var stuckTime = (DateTime.UtcNow - offlinePlayer.LastRequestedDatabaseSave).TotalSeconds;
-                    log.Error($"[LOGIN BLOCK] {character.Name} REJECTED after {MAX_LOGIN_RETRIES} retries. Save stuck {stuckTime:N1}s. DB queue: {DatabaseManager.Shard.QueueCount}");
-                    
-                    if (ConfigManager.Config.Chat.EnableDiscordConnection && ConfigManager.Config.Chat.PerformanceAlertsChannelId > 0)
-                    {
-                        try
-                        {
-                            var msg = $"🔴 **CRITICAL**: `{character.Name}` login blocked after {MAX_LOGIN_RETRIES} retries. Save stuck {stuckTime:N1}s. DB Queue: {DatabaseManager.Shard.QueueCount}";
-                            DiscordChatManager.SendDiscordMessage("CRITICAL ALERT", msg, ConfigManager.Config.Chat.PerformanceAlertsChannelId);
-                        }
-                        catch { }
-                    }
-                    
-                    return;
-                }
-                else
-                {
-                    var timeWaiting = (DateTime.UtcNow - offlinePlayer.LastRequestedDatabaseSave).TotalMilliseconds;
-                    log.Warn($"[LOGIN BLOCK] {character.Name} login delayed (retry {loginRetryCount + 1}/{MAX_LOGIN_RETRIES}), save in-progress {timeWaiting:N0}ms.");
-                    
-                    SendLoginBlockDiscordAlert(character.Name, timeWaiting);
-                    
-                    var retryChain = new ACE.Server.Entity.Actions.ActionChain();
-                    retryChain.AddDelaySeconds(2.0);
-                    retryChain.AddAction(WorldManager.ActionQueue, () =>
-                    {
-                        if (session != null && session.Player == null && session.State != Network.Enum.SessionState.TerminationStarted)
-                            PlayerEnterWorld(session, character, loginRetryCount + 1);
-                    });
-                    retryChain.EnqueueChain();
-                    return;
-                }
+                log.Warn($"[LOGIN_FLOW] {sw.ElapsedMilliseconds}ms - Clearing abandoned SaveInProgress for {character.Name}");
+                offlinePlayer.SaveInProgress = false;
+                offlinePlayer.SaveServerBootId = null;
             }
 
+            // NOTE: Removed Critical save trigger at login (PR 326) as it caused 10-15 minute login trickle
+            // by serializing all logins through the single-threaded Critical queue.
+            // Offline changes are persisted via:
+            // 1. Bank transfers already call offlinePlayer.SaveBiotaToDatabase() immediately
+            // 2. ChangesDetected flag transfers to online player (SwitchPlayerFromOfflineToOnline)
+            // 3. First periodic save (within 3 min) will persist any remaining changes
+
+            // Check if there are any pending or active saves for this character using authoritative save system
+            if (SaveScheduler.Instance.HasPendingOrActiveSave(character.Id))
+            {
+                log.Debug($"[LOGIN_FLOW] {sw.ElapsedMilliseconds}ms - HasPendingOrActiveSave=TRUE for {character.Name}");
+                // Prevent multiple callbacks for the same session/character login attempt
+                if (session.WaitingForLoginDrain)
+                {
+                    log.Debug($"[LOGIN_FLOW] {sw.ElapsedMilliseconds}ms - {character.Name} already waiting for saves to drain, ignoring duplicate PlayerEnterWorld call");
+                    return;
+                }
+
+
+                session.WaitingForLoginDrain = true;
+                var waitStartTime = DateTime.UtcNow;
+
+                // Register callback to continue login when saves complete
+                // This is silent - no client notification, no polling, no black screen delay
+                SaveScheduler.Instance.OnSavesDrained(character.Id, () =>
+                {
+                    session.WaitingForLoginDrain = false;
+                    log.Debug($"[LOGIN_FLOW] {sw.ElapsedMilliseconds}ms - Saves drained callback fired for {character.Name}");
+
+                    // Verify session is still valid before continuing
+                    if (session != null && session.Player == null && session.State != Network.Enum.SessionState.TerminationStarted)
+                    {
+                        var waitDuration = (DateTime.UtcNow - waitStartTime).TotalSeconds;
+                        log.Debug($"[LOGIN_FLOW] {sw.ElapsedMilliseconds}ms - Continuing login after {waitDuration:F3}s wait");
+                        
+                        // Alert if wait exceeded threshold (diagnostic only, no client notification)
+                        if (waitDuration > 5.0)
+                        {
+                            SendLoginDrainWaitAlert(character.Name, waitDuration);
+                        }
+
+                        // Recursively call PlayerEnterWorld to proceed with login
+                        PlayerEnterWorld(session, character);
+                    }
+                });
+                return;
+            }
+            else
+            {
+                 log.Debug($"[LOGIN_FLOW] {sw.ElapsedMilliseconds}ms - No pending saves for {character.Name}, proceeding to login immediately.");
+            }
+
+            // No saves in flight, proceed immediately with login
             DatabaseManager.Shard.GetCharacter(character.Id, fullCharacter =>
             {
                 var start = DateTime.UtcNow;
                 DatabaseManager.Shard.GetPossessedBiotasInParallel(character.Id, biotas =>
                 {
                     log.Debug($"GetPossessedBiotasInParallel for {character.Name} took {(DateTime.UtcNow - start).TotalMilliseconds:N0} ms, Queue Size: {DatabaseManager.Shard.QueueCount}");
-                    ActionQueue.EnqueueAction(new ActionEventDelegate(() => DoPlayerEnterWorld(session, fullCharacter, offlinePlayer.Biota, biotas)));
+
+                    if (session.IsHeadless)
+                    {
+                        log.Debug($"[LOGIN_FLOW] Headless session for {character.Name} passed all save checks. Skipping World Entry to preserve server resources.");
+                        return;
+                    }
+
+                    ActionQueue.EnqueueAction(new ActionEventDelegate(ActionType.WorldManager_DoPlayerEnterWorld, () => DoPlayerEnterWorld(session, fullCharacter, offlinePlayer.Biota, biotas), ActionPriority.High));
                 });
             });            
         }
@@ -205,6 +260,16 @@ namespace ACE.Server.Managers
                 player = new Player(playerBiota, possessedBiotas.Inventory, possessedBiotas.WieldedItems, character, session);
 
             session.SetPlayer(player);
+
+            // Clear abandoned SaveInProgress from previous server boots before world entry
+            if (player.SaveInProgress &&
+                player.SaveServerBootId != ServerRuntime.BootId)
+            {
+                log.Warn($"[LOGIN] Clearing abandoned SaveInProgress for {player.Name}");
+                player.SaveInProgress = false;
+                player.SaveStartTime = DateTime.MinValue;
+                player.SaveServerBootId = null;
+            }
 
             if (stripAdminProperties) // continue stripping properties
             {
@@ -291,7 +356,7 @@ namespace ACE.Server.Managers
 
                 var actionChain = new ActionChain();
                 actionChain.AddDelaySeconds(5.0f);
-                actionChain.AddAction(session.Player, () =>
+                actionChain.AddAction(session.Player, ActionType.Landblock_TeleportPlayerAfterFailureToAdd, () =>
                 {
                     if (session != null && session.Player != null)
                         session.Player.Teleport(fixLoc);
@@ -300,16 +365,16 @@ namespace ACE.Server.Managers
             }
 
             // These warnings are set by DDD_InterrogationResponse
-            if ((session.DatWarnCell || session.DatWarnLanguage || session.DatWarnPortal) && PropertyManager.GetBool("show_dat_warning"))
+            if ((session.DatWarnCell || session.DatWarnLanguage || session.DatWarnPortal) && ServerConfig.show_dat_warning.Value)
             {
-                var msg = PropertyManager.GetString("dat_older_warning_msg");
+                var msg = ServerConfig.dat_older_warning_msg.Value;
                 var chatMsg = new GameMessageSystemChat(msg, ChatMessageType.System);
                 session.Network.EnqueueSend(chatMsg);
             }
 
-            var popup_header = PropertyManager.GetString("popup_header");
-            var popup_motd = PropertyManager.GetString("popup_motd");
-            var popup_welcome = player.IsOlthoiPlayer ? PropertyManager.GetString("popup_welcome_olthoi") : PropertyManager.GetString("popup_welcome");
+            var popup_header = ServerConfig.popup_header.Value;
+            var popup_motd = ServerConfig.popup_motd.Value;
+            var popup_welcome = player.IsOlthoiPlayer ? ServerConfig.popup_welcome_olthoi.Value : ServerConfig.popup_welcome.Value;
 
             if (character.TotalLogins <= 1)
             {
@@ -326,7 +391,7 @@ namespace ACE.Server.Managers
             var info = "Welcome to Asheron's Call\n  powered by ACEmulator\n\nFor more information on commands supported by this server, type @acehelp\n";
             session.Network.EnqueueSend(new GameMessageSystemChat(info, ChatMessageType.Broadcast));
 
-            var server_motd = PropertyManager.GetString("server_motd");
+            var server_motd = ServerConfig.server_motd.Value;
             if (!string.IsNullOrEmpty(server_motd))
                 session.Network.EnqueueSend(new GameMessageSystemChat($"{server_motd}\n", ChatMessageType.Broadcast));
 
@@ -353,15 +418,15 @@ namespace ACE.Server.Managers
         /// Note that this work will be done on the next tick, not immediately, so be careful about your order of operations.
         /// If you must ensure order, pass your follow up work in with the argument actionToFollowUpWith. That work will be enqueued onto the Player.
         /// </summary>
-        public static void ThreadSafeTeleport(Player player, Position newPosition, IAction actionToFollowUpWith = null, bool fromPortal = false)
+        public static void ThreadSafeTeleport(Creature creature, Position newPosition, IAction actionToFollowUpWith = null, bool fromPortal = false)
         {
-            EnqueueAction(new ActionEventDelegate(() =>
+            EnqueueAction(new ActionEventDelegate(ActionType.WorldManager_ThreadSafeTeleport, () =>
             {
-                player.Teleport(newPosition, fromPortal);
+                creature.Teleport(newPosition, fromPortal);
 
-                if (actionToFollowUpWith != null)
-                    EnqueueAction(actionToFollowUpWith);
-            }));
+                    if (actionToFollowUpWith != null)
+                        EnqueueAction(actionToFollowUpWith);
+                }));
         }
 
         public static void EnqueueAction(IAction action)
@@ -381,6 +446,10 @@ namespace ACE.Server.Managers
         private static void UpdateWorld()
         {
             log.DebugFormat("Starting UpdateWorld thread");
+
+            // Preload landblocks before starting the world update loop
+            // This ensures all world initialization happens on the UpdateWorld thread
+            LandblockManager.PreloadConfigLandblocks();
 
             WorldActive = true;
             var worldTickTimer = new Stopwatch();
@@ -495,14 +564,18 @@ namespace ACE.Server.Managers
         /// </summary>
         public static void StopWorld() { pendingWorldStop = true; }
         
-        private static void SendLoginBlockDiscordAlert(string characterName, double timeWaiting)
+        /// <summary>
+        /// Sends a Discord alert if login drain wait exceeds threshold (5 seconds).
+        /// This is diagnostic only - no client notification, no polling delays.
+        /// </summary>
+        private static void SendLoginDrainWaitAlert(string characterName, double waitDurationSeconds)
         {
             var now = DateTime.UtcNow;
             
             if ((now - lastLoginBlockAlert).TotalMinutes >= 1)
                 loginBlockAlertsThisMinute = 0;
             
-            var maxAlerts = PropertyManager.GetLong("login_block_discord_max_alerts_per_minute", 3);
+            var maxAlerts = ServerConfig.login_block_discord_max_alerts_per_minute.Value;
             if (maxAlerts <= 0 || loginBlockAlertsThisMinute >= maxAlerts)
                 return;
             
@@ -512,9 +585,9 @@ namespace ACE.Server.Managers
             
             try
             {
-                var msg = $"⚠️ **LOGIN DELAYED**: `{characterName}` tried to login during save (pending {timeWaiting:N0}ms). Delayed 2s to prevent item loss.";
+                var msg = $"⚠️ **LOGIN DRAIN WAIT**: `{characterName}` waited {waitDurationSeconds:F1}s for saves to drain before login. This is normal but indicates slow save operations.";
                 
-                DiscordChatManager.SendDiscordMessage("ITEM LOSS PREVENTION", msg, 
+                DiscordChatManager.SendDiscordMessage("LOGIN DRAIN DIAGNOSTIC", msg, 
                     ConfigManager.Config.Chat.PerformanceAlertsChannelId);
                 
                 loginBlockAlertsThisMinute++;
@@ -522,7 +595,7 @@ namespace ACE.Server.Managers
             }
             catch (Exception ex)
             {
-                log.Error($"Failed to send login block alert to Discord: {ex.Message}");
+                log.Error($"Failed to send login drain wait alert to Discord: {ex.Message}");
             }
         }
     }

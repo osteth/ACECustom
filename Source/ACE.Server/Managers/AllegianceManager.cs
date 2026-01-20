@@ -204,7 +204,7 @@ namespace ACE.Server.Managers
         // We must also protect against cross-thread operations on vassal/patron (non-concurrent collections)
         public static void PassXP(AllegianceNode vassalNode, ulong amount, bool direct, bool luminance = false)
         {
-            WorldManager.EnqueueAction(new ActionEventDelegate(() => DoPassXP(vassalNode, amount, direct, luminance)));
+            WorldManager.EnqueueAction(new ActionEventDelegate(ActionType.AllegianceManager_DoPassXP, () => DoPassXP(vassalNode, amount, direct, luminance)));
         }
 
         private static void DoPassXP(AllegianceNode vassalNode, ulong amount, bool direct, bool luminance = false)
@@ -269,8 +269,9 @@ namespace ACE.Server.Managers
             var vassal = vassalNode.Player;
             var patron = patronNode.Player;
 
-            if (!vassal.ExistedBeforeAllegianceXpChanges)
-                return;
+            // Removed level requirement check - patrons can now receive passup regardless of level
+            //if (!vassal.ExistedBeforeAllegianceXpChanges)
+            //    return;
 
             if (patron.GetProperty(PropertyBool.IsMule).HasValue && patron.GetProperty(PropertyBool.IsMule).Value == true)
             {
@@ -306,7 +307,7 @@ namespace ACE.Server.Managers
 
             if (luminance)
             {
-                var lumMult = PropertyManager.GetDouble("lum_passup_mult", 0.5);
+                var lumMult = ServerConfig.lum_passup_mult.Value;
                 generatedAmount = (uint)(generatedAmount * lumMult);
                 passupAmount = (uint)(passupAmount * lumMult);
             }
@@ -345,7 +346,7 @@ namespace ACE.Server.Managers
 
                 vassal.AllegianceXPGenerated += generatedAmount;
 
-                if (PropertyManager.GetBool("offline_xp_passup_limit"))
+                if (ServerConfig.offline_xp_passup_limit.Value)
                     patron.AllegianceXPCached = Math.Min(patron.AllegianceXPCached + passupAmount, uint.MaxValue);
                 else
                     patron.AllegianceXPCached += passupAmount;
@@ -450,7 +451,7 @@ namespace ACE.Server.Managers
         // We must add thread safety to prevent AllegianceManager corruption
         public static void HandlePlayerDelete(uint playerGuid)
         {
-            WorldManager.EnqueueAction(new ActionEventDelegate(() => DoHandlePlayerDelete(playerGuid)));
+            WorldManager.EnqueueAction(new ActionEventDelegate(ActionType.AllegianceManager_DoHandlePlayerDelete, () => DoHandlePlayerDelete(playerGuid)));
         }
 
         private static void DoHandlePlayerDelete(uint playerGuid)

@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Numerics;
 using System.Text;
+using System.Threading;
 
 using log4net;
 
@@ -96,6 +97,66 @@ namespace ACE.Server.WorldObjects
         public bool HitMsg;     // FIXME: find a better way to do this for projectiles
 
         public WorldObject Wielder;
+
+        // Container mutation guard
+        // Used to suppress side effects (enchant invalidation, etc)
+        // while an item is temporarily between containers
+        // NOTE: This field may be accessed from multiple world threads concurrently (e.g., different landblock threads),
+        // so we use Interlocked operations for thread safety. SaveBiotaToDatabase reads this via IsInContainerMutation.
+        private int _containerMutationDepth;
+        private DateTime _lastContainerMutationUtc = DateTime.MinValue;
+        private const int MUTATION_LEAK_TIMEOUT_SECONDS = 30; // Safety valve: reset depth if stuck >30s
+
+        internal bool IsInContainerMutation => Volatile.Read(ref _containerMutationDepth) > 0;
+
+        /// <summary>
+        /// Begins a container mutation operation. Must be called before TryRemoveFromInventory.
+        /// Always increments depth to track all mutations (ground→container, newly spawned→container,
+        /// loot→inventory, split created stacks, etc.). The container IDs are used only for logging
+        /// and diagnostics, not for gating depth management.
+        /// Thread-safe: Uses Interlocked.Increment for concurrent access from multiple world threads.
+        /// </summary>
+        internal void BeginContainerMutation(uint? oldContainerBiotaId)
+        {
+            var newDepth = Interlocked.Increment(ref _containerMutationDepth);
+            _lastContainerMutationUtc = DateTime.UtcNow;
+#if DEBUG
+            log.Debug($"[CONTAINER MUTATION] Begin for {Name} (0x{Guid}) | OldContainerBiotaId={oldContainerBiotaId} | Depth={newDepth}");
+#endif
+        }
+
+        /// <summary>
+        /// Ends a container mutation operation. Must be called after successful TryAddToInventory or on failure.
+        /// Always decrements depth if > 0 to prevent depth leaks and permanent save suppression.
+        /// Depth management must be structural, not semantic.
+        /// Thread-safe: Uses Interlocked.Decrement for concurrent access from multiple world threads.
+        /// When mutation depth transitions from >0 to 0, marks ChangesDetected = true to ensure persistence.
+        /// The normal save tick or scheduled save will flush the changes, avoiding direct persistence calls
+        /// from gameplay mutation plumbing which can run on non-world threads and create timing-dependent issues.
+        /// </summary>
+        internal void EndContainerMutation(uint? oldContainerBiotaId, uint? newContainerBiotaId)
+        {
+            var prevDepth = Volatile.Read(ref _containerMutationDepth);
+            if (prevDepth > 0)
+            {
+                var newDepth = Interlocked.Decrement(ref _containerMutationDepth);
+                _lastContainerMutationUtc = DateTime.UtcNow;
+#if DEBUG
+                log.Debug($"[CONTAINER MUTATION] End for {Name} (0x{Guid}) | Old={oldContainerBiotaId} New={newContainerBiotaId} | Depth={newDepth}");
+#endif
+                // When mutation depth transitions from >0 to 0, mark dirty to ensure persistence
+                // The normal player save tick or scheduled save will flush it, avoiding direct
+                // persistence calls from mutation code which can run on non-world threads and create
+                // timing-dependent issues that are "impossible to test locally".
+                if (newDepth == 0)
+                {
+                    ChangesDetected = true;
+#if DEBUG
+                    log.Debug($"[CONTAINER MUTATION] Mutation depth reached 0 for {Name} (0x{Guid}) - marked ChangesDetected=true");
+#endif
+                }
+            }
+        }
 
         public WorldObject() { }
         public WorldObject(ObjectGuid guid)
@@ -783,8 +844,7 @@ namespace ACE.Server.WorldObjects
         {
             var baseDamage = GetBaseDamage();
 
-            if (weapon == null)
-                weapon = wielder.GetEquippedWeapon();
+            weapon ??= wielder.GetEquippedWeapon();
 
             var baseDamageMod = new BaseDamageMod(baseDamage, wielder, weapon);
 
@@ -812,6 +872,7 @@ namespace ACE.Server.WorldObjects
             {
                 log.Debug($"[DESTROY] Clearing stuck SaveInProgress flag for {Name} (0x{Guid}) - was in-flight for {(DateTime.UtcNow - SaveStartTime).TotalMilliseconds:N0}ms");
                 SaveInProgress = false;
+                SaveStartTime = DateTime.MinValue; // Reset for next save
             }
 
             ReleasedTimestamp = Time.GetUnixTime();
@@ -865,18 +926,13 @@ namespace ACE.Server.WorldObjects
 
             var actionChain = new ActionChain();
             actionChain.AddDelaySeconds(1.0f);
-            actionChain.AddAction(this, () => Destroy(raiseNotifyOfDestructionEvent));
+            actionChain.AddAction(this, ActionType.WorldObject_Destroy, () => Destroy(raiseNotifyOfDestructionEvent));
             actionChain.EnqueueChain();
         }
 
         public string GetPluralName()
         {
-            var pluralName = PluralName;
-
-            if (pluralName == null)
-                pluralName = Name.Pluralize();
-
-            return pluralName;
+            return PluralName ?? Name.Pluralize();
         }
 
         /// <summary>
@@ -915,7 +971,7 @@ namespace ACE.Server.WorldObjects
                 motionInterp.apply_raw_movement(true, true);
             }
 
-            if (persist && PropertyManager.GetBool("persist_movement"))
+            if (persist && ServerConfig.persist_movement.Value)
                 motion.Persist(CurrentMotionState);
 
             // hardcoded ready?
@@ -938,7 +994,7 @@ namespace ACE.Server.WorldObjects
         {
             var motion = new Motion(stance);
 
-            if (PropertyManager.GetBool("persist_movement"))
+            if (ServerConfig.persist_movement.Value)
                 motion.Persist(CurrentMotionState);
 
             CurrentMotionState = motion;

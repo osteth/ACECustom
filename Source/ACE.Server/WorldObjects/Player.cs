@@ -319,7 +319,7 @@ namespace ACE.Server.WorldObjects
                 var currentSkill = (int)GetCreatureSkill(skill).Current;
                 int difficulty = (int)creature.GetCreatureSkill(Skill.Deception).Current;
 
-                if (PropertyManager.GetBool("assess_creature_mod") && skill == Skill.AssessCreature
+                if (ServerConfig.assess_creature_mod.Value && skill == Skill.AssessCreature
                         && Skills[Skill.AssessCreature].AdvancementClass < SkillAdvancementClass.Trained)
                     currentSkill = (int)((Focus.Current + Self.Current) / 2);
 
@@ -510,7 +510,7 @@ namespace ACE.Server.WorldObjects
                     IsFrozen = true;
                     EnqueueBroadcastPhysicsState();
 
-                    LogoffTimestamp = Time.GetFutureUnixTime(PropertyManager.GetLong("pk_timer"));
+                    LogoffTimestamp = Time.GetFutureUnixTime(ServerConfig.pk_timer.Value);
                     PlayerManager.AddPlayerToLogoffQueue(this);
                 }
                 return false;
@@ -525,6 +525,12 @@ namespace ACE.Server.WorldObjects
         {
             IsBusy = true;
             IsLoggingOut = true;
+            // Note: BeginLogoutSave() should already be called by LogOffPlayer in Session.cs
+            // before calling LogOut(). This is defensive in case LogOut() is called directly.
+            if (!_isShuttingDownOrOffline)
+            {
+                BeginLogoutSave();
+            }
 
             if (Fellowship != null)
                 FellowshipQuit(false);
@@ -539,7 +545,7 @@ namespace ACE.Server.WorldObjects
 
             if (!clientSessionTerminatedAbruptly)
             {
-                if (PropertyManager.GetBool("use_turbine_chat"))
+                if (ServerConfig.use_turbine_chat.Value)
                 {
                     if (IsOlthoiPlayer)
                     {
@@ -595,11 +601,11 @@ namespace ACE.Server.WorldObjects
 
                     var logoutChain = new ActionChain();
 
-                    logoutChain.AddAction(this, () => SendMotionAsCommands(motionCommand, stanceNonCombat));
+                    logoutChain.AddAction(this, ActionType.Player_SendNonCombatStance, () => SendMotionAsCommands(motionCommand, stanceNonCombat));
                     logoutChain.AddDelaySeconds(animLength);
 
                     // remove the player from landblock management -- after the animation has run
-                    logoutChain.AddAction(WorldManager.ActionQueue, () =>
+                    logoutChain.AddAction(WorldManager.ActionQueue, ActionType.Player_FinalizeLogout, () =>
                     {
                         // If we're in the dying animation process, we cannot RemoveWorldObject and logout until that animation completes..
                         if (IsInDeathProcess)
@@ -643,9 +649,11 @@ namespace ACE.Server.WorldObjects
         {
             CurrentLandblock?.RemoveWorldObject(Guid, false);
             SetPropertiesAtLogOut();
-            SavePlayerToDatabase(true);
-            // Don't set the player offline until they have successfully saved
-            //PlayerManager.SwitchPlayerFromOnlineToOffline(this);
+
+            // FAILSAFE: Ensure player is removed from PlayerManager.onlinePlayers
+            // This is required because ForceLogoff bypasses the standard Session.LogOffPlayer flow
+            // which handles the switch to offline status.
+            PlayerManager.SwitchPlayerFromOnlineToOffline(this);
 
             log.Debug($"[LOGOUT] Account {Account.AccountName} exited the world with character {Name} (0x{Guid}) at {DateTime.Now}.");
         }
@@ -1158,7 +1166,7 @@ namespace ACE.Server.WorldObjects
 
             var actionChain = new ActionChain();
             actionChain.AddDelaySeconds(animTime);
-            actionChain.AddAction(this, () =>
+            actionChain.AddAction(this, ActionType.Player_PKLiteStartTransition, () =>
             {
                 IsBusy = true;
 
@@ -1172,11 +1180,11 @@ namespace ACE.Server.WorldObjects
                 // wait for animation to complete
                 animTime = DatManager.PortalDat.ReadFromDat<MotionTable>(MotionTableId).GetAnimationLength(MotionCommand.EnterPKLite);
                 innerChain.AddDelaySeconds(animTime);
-                innerChain.AddAction(this, () =>
+                innerChain.AddAction(this, ActionType.Player_PKLiteSetState, () =>
                 {
                     IsBusy = false;
 
-                    if (PropertyManager.GetBool("allow_pkl_bump"))
+                    if (ServerConfig.allow_pkl_bump.Value)
                     {
                         // check for collisions
                         PlayerKillerStatus = PlayerKillerStatus.PKLite;

@@ -1,22 +1,22 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-
 using ACE.Common;
 using ACE.Common.Extensions;
 using ACE.Entity.Enum;
 using ACE.Entity.Enum.Properties;
 using ACE.Entity.Models;
 using ACE.Server.Entity;
+using ACE.Server.Factories.Enum;
 using ACE.Server.Managers;
-using ACE.Server.Network.GameMessages.Messages;
 using ACE.Server.Network.GameEvent.Events;
+using ACE.Server.Network.GameMessages.Messages;
 using ACE.Server.Network.Structure;
 using ACE.Server.WorldObjects.Entity;
-using System.Runtime.CompilerServices;
-using ACE.Server.Factories.Enum;
 using Google.Protobuf.WellKnownTypes;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using static Google.Protobuf.Compiler.CodeGeneratorResponse.Types;
 
 namespace ACE.Server.WorldObjects.Managers
 {
@@ -231,7 +231,7 @@ namespace ACE.Server.WorldObjects.Managers
                 }
                 else if (caster is Player dotPlayer && (dotPlayer.AugmentationIncreasedSpellDuration > 0 || (dotPlayer.LuminanceAugmentSpellDurationCount ?? 0) > 0) && spell.DotDuration > 0)
                 {
-                    entry.Duration *= 1.0f + (dotPlayer.AugmentationIncreasedSpellDuration * 0.2f) + ((dotPlayer.LuminanceAugmentSpellDurationCount ?? 0) * PropertyManager.GetDouble("void_dot_duration_aug_effect", 0.1));
+                    entry.Duration *= 1.0f + (dotPlayer.AugmentationIncreasedSpellDuration * 0.2f) + ((dotPlayer.LuminanceAugmentSpellDurationCount ?? 0) * ServerConfig.void_dot_duration_aug_effect.Value);
                 }
             }
             else
@@ -260,19 +260,19 @@ namespace ACE.Server.WorldObjects.Managers
             bool selfCastEligible = (spell.IsBeneficial && spell.IsSelfTargeted) || spell.IsHarmful;
 
             //calculate luminance aug additions for statmod
-            var luminanceAug = 0.0f;
+            entry.StatModValue = spell.StatModVal;
 
             if (caster != null && caster is Creature)
             {
                 var player = caster as Creature;
                 if (spell.School == MagicSchool.CreatureEnchantment && !spell.IsFellowshipSpell && spell.Id != 5753 && spell.IsBeneficial && spell.IsSelfTargeted)
                 {
-                    luminanceAug += player.LuminanceAugmentCreatureCount ?? 0.0f;
+                    entry.StatModValue += player.LuminanceAugmentCreatureCount ?? 0.0f;
                     entry.AugmentationLevelWhenCast = player.LuminanceAugmentCreatureCount ?? 0;
                 }
                 else if (spell.School == MagicSchool.CreatureEnchantment && spell.IsHarmful)
                 {
-                    luminanceAug -= player.LuminanceAugmentCreatureCount ?? 0.0f;
+                    entry.StatModValue -= player.LuminanceAugmentCreatureCount ?? 0.0f;
                     entry.AugmentationLevelWhenCast = player.LuminanceAugmentCreatureCount ?? 0;
                 }
 
@@ -284,33 +284,37 @@ namespace ACE.Server.WorldObjects.Managers
                         if (spell.Id == 1487 || spell.Id == 1488 || spell.Id == 1489 || spell.Id == 1490 ||
                             spell.Id == 1491 || spell.Id == 1492 || spell.Id == 4399 || spell.Id == 2100) // Brittlemail/Tattercoat
                         {
-                            luminanceAug -= (player.LuminanceAugmentItemCount ?? 0.0f) * 1.00f;
+                            entry.StatModValue -= (player.LuminanceAugmentItemCount ?? 0.0f) * 1.00f;
                         }
                         else // Impen
                         {
-                            luminanceAug += (player.LuminanceAugmentItemCount ?? 0.0f) * 1.00f;
+                            entry.StatModValue += (player.LuminanceAugmentItemCount ?? 0.0f) * 1.00f;
                         }
+                        // This is required for sorting in PropertiesEnchantmentRegistryExtensions.GetEnchantmentsTopLayerByStatModType()
+                        // Otherwise, Impenetrability will not be prioritized over spells that arent affected by luminance augs
+                        // Example: ShadowArmor from olthoi infused shadow armor has powerlevel 900 which overrides impen unless we set AugmentationLevelWhenCast
+                        entry.AugmentationLevelWhenCast = player.LuminanceAugmentItemCount ?? 0;
                     }
                     else if (spell.StatModKey == 360 && selfCastEligible) //blood drinker buffed
                     {
-                        luminanceAug += (player.LuminanceAugmentItemCount ?? 0.0f) * 0.5f;
+                        entry.StatModValue += (player.LuminanceAugmentItemCount ?? 0.0f) * 0.5f;
                     }
                     else if (spell.StatModKey == 170 && selfCastEligible) //spirit drinker
                     {
-                        luminanceAug += (player.LuminanceAugmentItemCount ?? 0.0f) * 0.005f;
+                        entry.StatModValue += (player.LuminanceAugmentItemCount ?? 0.0f) * 0.005f;
                     }
                     else if (spell.Name.Contains("Bane") || spell.StatModKey == 171
                         || spell.StatModKey == 318 || spell.StatModKey ==  317) //banes and surges
                     {
-                        luminanceAug += (player.LuminanceAugmentItemCount ?? 0.0f) * 0.01f;
+                        entry.StatModValue += (player.LuminanceAugmentItemCount ?? 0.0f) * 0.01f;
                     }
                     else if (spell.StatModKey == 168 || spell.StatModKey == 169 && selfCastEligible)
                     {
-                        luminanceAug += GetItemAugPercentageRating(player.LuminanceAugmentItemCount ?? 0); //(player.LuminanceAugmentItemCount ?? 0.0f) * 0.01f;
+                        entry.StatModValue += GetItemAugPercentageRating(player.LuminanceAugmentItemCount ?? 0); //(player.LuminanceAugmentItemCount ?? 0.0f) * 0.01f;
                     }
                     else if (spell.StatModKey == 361 && selfCastEligible) //eg atlans alacrity
                     {
-                        luminanceAug -= (player.LuminanceAugmentItemCount ?? 0.0f) * 1.0f;
+                        entry.StatModValue -= (player.LuminanceAugmentItemCount ?? 0.0f) * 1.0f;
                     }
                     if (selfCastEligible)
                     {
@@ -323,44 +327,52 @@ namespace ACE.Server.WorldObjects.Managers
                     {
                         if (spell.StatModKey == 0) //armor -- single point
                         {
-                            luminanceAug += (player.LuminanceAugmentLifeCount ?? 0.0f);
+                            entry.StatModValue += (player.LuminanceAugmentLifeCount ?? 0.0f);
                         }
                         else if (spell.StatModKey == 64 || spell.StatModKey == 65 || spell.StatModKey == 66 //slash, pierce, bludge
                             || spell.StatModKey == 67 || spell.StatModKey == 68 || spell.StatModKey == 69 || spell.StatModKey == 70) //fire, cold, acid, electric
                         {
-                            luminanceAug -= GetLifeAugProtectRating(player.LuminanceAugmentLifeCount ?? 0);
+                            entry.StatModValue -= GetLifeAugProtectRating(player.LuminanceAugmentLifeCount ?? 0);
                         }
                         else
                         {
-                            luminanceAug += (player.LuminanceAugmentLifeCount ?? 0.0f) * 0.10f;
+                            entry.StatModValue += (player.LuminanceAugmentLifeCount ?? 0.0f) * 0.10f;
                         }                        
                     }
                     else if (spell.IsHarmful) //debuffs -- single point
                     {
                         if (spell.StatModKey == 0)
                         {
-                            luminanceAug -= (player.LuminanceAugmentLifeCount ?? 0.0f);
+                            entry.StatModValue -= (player.LuminanceAugmentLifeCount ?? 0.0f);
                         }
                         else if (spell.StatModKey == 64 || spell.StatModKey == 65 || spell.StatModKey == 66 //slash, pierce, bludge
                             || spell.StatModKey == 67 || spell.StatModKey == 68 || spell.StatModKey == 69 || spell.StatModKey == 70 //fire, cold, acid, electric
                             || spell.StatModKey == 312 || spell.StatModKey == 307 || spell.StatModKey == 318 || spell.StatModKey == 308 || spell.StatModKey == 317) //surge of regeneration
                         {
-                            luminanceAug += (player.LuminanceAugmentLifeCount ?? 0.0f) * 0.01f;
+                            entry.StatModValue += (player.LuminanceAugmentLifeCount ?? 0.0f) * 0.01f;
                         }
                         else
                         {
-                            luminanceAug -= (player.LuminanceAugmentLifeCount ?? 0.0f) * 0.10f;
+                            entry.StatModValue -= (player.LuminanceAugmentLifeCount ?? 0.0f) * 0.10f;
                         }
                     }
                     entry.AugmentationLevelWhenCast = player.LuminanceAugmentLifeCount ?? 0;
                 }
 
-                entry.StatModValue = spell.StatModVal + luminanceAug;
-                
             }
             else
-            {
-                entry.StatModValue = spell.StatModVal;
+            {                
+                // Handle ItemEnchantment spells on wielded items when caster is not a Creature
+                // (e.g., spells cast from scrolls, gems, or other items)
+                if (WorldObject.WielderId != null && spell.School == MagicSchool.ItemEnchantment && !equip)
+                {
+                    var wielder = WorldObject.CurrentLandblock?.GetObject(WorldObject.WielderId.Value) as Player;
+
+                    if (wielder != null)
+                    {
+                        entry.AugmentationLevelWhenCast = wielder.LuminanceAugmentItemCount ?? 0;
+                    }
+                }
             }
 
 
@@ -392,6 +404,28 @@ namespace ACE.Server.WorldObjects.Managers
             return entry;
         }
 
+        // Implements diminishing returns using the formula (1.0 - (1.0 - r)^a)
+        // TODO(Ruggan): once on the new calc unconditionally, remove the force_new_calc parameter.
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float GetLifeAugProtectRatingNew(long LifeAugAmt, Creature creature)
+        {
+            double r = Math.Clamp(
+                creature?.GetProperty(PropertyFloat.LifeAugTuningConstantOverride) ?? ServerConfig.life_aug_prot_tuning_constant.Value,
+                0.0,
+                1.0);
+
+            double max_bonus = Math.Clamp(
+                creature?.GetProperty(PropertyFloat.LifeAugProtMaxBonusOverride) ?? ServerConfig.life_aug_prot_max_bonus.Value,
+                0.0,
+                1.0);
+
+            return (float)Math.Clamp(
+                max_bonus * (1.0 - Math.Pow(1.0 - r, LifeAugAmt)),
+                0.0,
+                1.0);
+
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static float GetLifeAugProtectRating(long LifeAugAmt)
@@ -610,7 +644,7 @@ namespace ACE.Server.WorldObjects.Managers
         /// </summary>
         public float GetMinVitae(uint level)
         {
-            var propVitae = 1.0 - PropertyManager.GetDouble("vitae_penalty_max");
+            var propVitae = 1.0 - ServerConfig.vitae_penalty_max.Value;
 
             var maxPenalty = (level - 1) * 3;
             if (maxPenalty < 1)
@@ -650,7 +684,7 @@ namespace ACE.Server.WorldObjects.Managers
                 }
                 else
                 {
-                    vitae.StatModValue = 1.0f - (float)PropertyManager.GetDouble("vitae_penalty");
+                    vitae.StatModValue = 1.0f - (float)ServerConfig.vitae_penalty.Value;
                 
                 }                               
                 WorldObject.Biota.PropertiesEnchantmentRegistry.AddEnchantment(vitae, WorldObject.BiotaDatabaseLock);
@@ -666,7 +700,7 @@ namespace ACE.Server.WorldObjects.Managers
                 }
                 else
                 {
-                    vitae.StatModValue -= (float)PropertyManager.GetDouble("vitae_penalty");
+                    vitae.StatModValue -= (float)ServerConfig.vitae_penalty.Value;
 
                 }
                 WorldObject.ChangesDetected = true;
@@ -841,16 +875,13 @@ namespace ACE.Server.WorldObjects.Managers
         /// </summary>
         public PropertyFloat GetVitalRateKey(CreatureVital vital)
         {
-            switch (vital.Vital)
+            return vital.Vital switch
             {
-                case PropertyAttribute2nd.MaxHealth:
-                    return PropertyFloat.HealthRate;
-                case PropertyAttribute2nd.MaxStamina:
-                    return PropertyFloat.StaminaRate;
-                case PropertyAttribute2nd.MaxMana:
-                    return PropertyFloat.ManaRate;
-            }
-            return 0;
+                PropertyAttribute2nd.MaxHealth => PropertyFloat.HealthRate,
+                PropertyAttribute2nd.MaxStamina => PropertyFloat.StaminaRate,
+                PropertyAttribute2nd.MaxMana => PropertyFloat.ManaRate,
+                _ => 0,
+            };
         }
 
         /// <summary>
@@ -858,26 +889,18 @@ namespace ACE.Server.WorldObjects.Managers
         /// </summary>
         public PropertyFloat GetImpenBaneKey(DamageType damageType)
         {
-            switch (damageType)
+            return damageType switch
             {
-                case DamageType.Slash:
-                    return PropertyFloat.ArmorModVsSlash;
-                case DamageType.Pierce:
-                    return PropertyFloat.ArmorModVsPierce;
-                case DamageType.Bludgeon:
-                    return PropertyFloat.ArmorModVsBludgeon;
-                case DamageType.Fire:
-                    return PropertyFloat.ArmorModVsFire;
-                case DamageType.Cold:
-                    return PropertyFloat.ArmorModVsCold;
-                case DamageType.Acid:
-                    return PropertyFloat.ArmorModVsAcid;
-                case DamageType.Electric:
-                    return PropertyFloat.ArmorModVsElectric;
-                case DamageType.Nether:
-                    return PropertyFloat.ArmorModVsNether;
-            }
-            return 0;
+                DamageType.Slash => PropertyFloat.ArmorModVsSlash,
+                DamageType.Pierce => PropertyFloat.ArmorModVsPierce,
+                DamageType.Bludgeon => PropertyFloat.ArmorModVsBludgeon,
+                DamageType.Fire => PropertyFloat.ArmorModVsFire,
+                DamageType.Cold => PropertyFloat.ArmorModVsCold,
+                DamageType.Acid => PropertyFloat.ArmorModVsAcid,
+                DamageType.Electric => PropertyFloat.ArmorModVsElectric,
+                DamageType.Nether => PropertyFloat.ArmorModVsNether,
+                _ => 0,
+            };
         }
 
         /// <summary>
@@ -885,26 +908,18 @@ namespace ACE.Server.WorldObjects.Managers
         /// </summary>
         public PropertyFloat GetResistanceKey(DamageType damageType)
         {
-            switch (damageType)
+            return damageType switch
             {
-                case DamageType.Slash:
-                    return PropertyFloat.ResistSlash;
-                case DamageType.Pierce:
-                    return PropertyFloat.ResistPierce;
-                case DamageType.Bludgeon:
-                    return PropertyFloat.ResistBludgeon;
-                case DamageType.Fire:
-                    return PropertyFloat.ResistFire;
-                case DamageType.Cold:
-                    return PropertyFloat.ResistCold;
-                case DamageType.Acid:
-                    return PropertyFloat.ResistAcid;
-                case DamageType.Electric:
-                    return PropertyFloat.ResistElectric;
-                case DamageType.Nether:
-                    return PropertyFloat.ResistNether;
-            }
-            return 0;
+                DamageType.Slash => PropertyFloat.ResistSlash,
+                DamageType.Pierce => PropertyFloat.ResistPierce,
+                DamageType.Bludgeon => PropertyFloat.ResistBludgeon,
+                DamageType.Fire => PropertyFloat.ResistFire,
+                DamageType.Cold => PropertyFloat.ResistCold,
+                DamageType.Acid => PropertyFloat.ResistAcid,
+                DamageType.Electric => PropertyFloat.ResistElectric,
+                DamageType.Nether => PropertyFloat.ResistNether,
+                _ => 0,
+            };
         }
 
         // refactor me
@@ -1153,8 +1168,42 @@ namespace ACE.Server.WorldObjects.Managers
                     modifier *= enchantment.StatModValue;
             }
 
-            return modifier;
+            // Don't allow a negative modifier (this will flip the damage sign, causing unintended behavior).
+            return Math.Max(modifier, 0f);
         }
+
+
+        /// <summary>
+        /// Gets the resistance modifier for a damage type
+        /// </summary>
+        public virtual float GetProtectionResistanceModNew(DamageType damageType)
+        {
+            var typeFlags = EnchantmentTypeFlags.Float | EnchantmentTypeFlags.SingleStat | EnchantmentTypeFlags.Multiplicative;
+            var resistance = GetResistanceKey(damageType);
+            var enchantments = GetEnchantments_TopLayer(typeFlags, (uint)resistance);
+
+            // multiplicative
+            var modifier = 1.0f;
+            foreach (var enchantment in enchantments)
+            {
+                // TODO(Ruggan): Remove and merge into the normal calc once rolled out.
+                // For now, we just calculate the new value by backing out the old bonus and adding back in the new one.
+                // This is a little hacky, but it avoids the need to save a new field to the database, prevents devs/players
+                // from needing to rebuff to see the changes, and still gives us hot-swapping. Eventually, this should get
+                // cleaned up by getting rid of the "StatModValueNew" variable and setting "StatModValue" directly using
+                // the new life curve. Since a caching layer wraps this layer in all prod use, this calculation is only
+                // done once at the time of first need - future reads are pulled from the cache.
+                var StatModValueNew = enchantment.StatModValue
+                    + GetLifeAugProtectRating(enchantment.AugmentationLevelWhenCast ?? 0)
+                    - GetLifeAugProtectRatingNew(enchantment.AugmentationLevelWhenCast ?? 0, WorldObject as Creature);
+                if (StatModValueNew < 1.0f)
+                    modifier *= StatModValueNew;
+            }
+
+            // Don't allow a negative modifier (this will flip the damage sign, causing unintended behavior).
+            return Math.Max(modifier, 0f);
+        }
+
 
         /// <summary>
         /// Gets the resistance modifier for a damage type
@@ -1400,7 +1449,7 @@ namespace ACE.Server.WorldObjects.Managers
             }
             var rating = (int)Math.Round(totalBaseDamage / 8.0f);   // thanks to Xenocide for this formula!
             //Console.WriteLine($"{WorldObject.Name}.NetherDotDamageRating: {rating}");
-            long maxVoidRating = PropertyManager.GetLong("max_nether_dot_damage_rating");
+            long maxVoidRating = ServerConfig.max_nether_dot_damage_rating.Value;
             if (rating > maxVoidRating)
                 rating = (int)maxVoidRating;
             return rating;
@@ -1536,7 +1585,7 @@ namespace ACE.Server.WorldObjects.Managers
             creature.DamageHistory.OnHeal((uint)healAmount);
 
             if (creature is Player player)
-                player.SendMessage($"You receive {healAmount} points of periodic healing.", PropertyManager.GetBool("aetheria_heal_color") ? ChatMessageType.Broadcast : ChatMessageType.Combat);
+                player.SendMessage($"You receive {healAmount} points of periodic healing.", ServerConfig.aetheria_heal_color.Value ? ChatMessageType.Broadcast : ChatMessageType.Combat);
         }
 
         /// <summary>
@@ -1591,7 +1640,7 @@ namespace ACE.Server.WorldObjects.Managers
                     // instead of applying it on top like direct damage
 
                     if (damageType == DamageType.Nether)
-                        resistanceMod = (float)PropertyManager.GetDouble("void_pvp_modifier");
+                        resistanceMod = (float)ServerConfig.void_pvp_modifier.Value;
                 }
 
                 // with the halvening, this actually seems like the fairest balance currently..
@@ -1690,8 +1739,7 @@ namespace ACE.Server.WorldObjects.Managers
         {
             // assumed to be DoT enchantment
 
-            if (heartbeatInterval == null)
-                heartbeatInterval = WorldObject.HeartbeatInterval ?? 5.0;
+            heartbeatInterval ??= WorldObject.HeartbeatInterval ?? 5.0;
 
             // it's possible retail had a separate ticking mechanism for these,
             // that ensured ticks every 5s, instead of heartbeat intervals
@@ -1713,8 +1761,7 @@ namespace ACE.Server.WorldObjects.Managers
 
             var creatureHeartbeatInterval = WorldObject.HeartbeatInterval ?? 5.0;
 
-            if (heartbeatInterval == null)
-                heartbeatInterval = creatureHeartbeatInterval;
+            heartbeatInterval ??= creatureHeartbeatInterval;
 
             if (heartbeatInterval == creatureHeartbeatInterval)
                 return enchantment.StatModValue;

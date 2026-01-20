@@ -112,7 +112,7 @@ namespace ACE.Server.WorldObjects
             var animLength = DatManager.PortalDat.ReadFromDat<MotionTable>(MotionTableId).GetAnimationLength(MotionCommand.HouseRecall);
             actionChain.AddDelaySeconds(animLength);
             IsBusy = true;
-            actionChain.AddAction(this, () =>
+            actionChain.AddAction(this, ActionType.PlayerLocation_TeleportToHouse, () =>
             {
                 IsBusy = false;
                 var endPos = new Position(Location);
@@ -179,7 +179,7 @@ namespace ACE.Server.WorldObjects
             // Then do teleport
             IsBusy = true;
             lifestoneChain.AddDelaySeconds(DatManager.PortalDat.ReadFromDat<MotionTable>(MotionTableId).GetAnimationLength(MotionCommand.LifestoneRecall));
-            lifestoneChain.AddAction(this, () =>
+            lifestoneChain.AddAction(this, ActionType.PlayerLocation_TeleportToLifestone, () =>
             {
                 IsBusy = false;
                 var endPos = new Position(Location);
@@ -245,7 +245,7 @@ namespace ACE.Server.WorldObjects
 
             // Then do teleport
             IsBusy = true;
-            mpChain.AddAction(this, () =>
+            mpChain.AddAction(this, ActionType.PlayerLocation_TeleportToMarketplace, () =>
             {
                 IsBusy = false;
                 var endPos = new Position(Location);
@@ -317,7 +317,7 @@ namespace ACE.Server.WorldObjects
             IsBusy = true;
             var animLength = DatManager.PortalDat.ReadFromDat<MotionTable>(MotionTableId).GetAnimationLength(MotionCommand.AllegianceHometownRecall);
             actionChain.AddDelaySeconds(animLength);
-            actionChain.AddAction(this, () =>
+            actionChain.AddAction(this, ActionType.PlayerLocation_TeleportToAllegianceHometown, () =>
             {
                 IsBusy = false;
                 var endPos = new Position(Location);
@@ -412,7 +412,7 @@ namespace ACE.Server.WorldObjects
             actionChain.AddDelaySeconds(animLength);
 
             IsBusy = true;
-            actionChain.AddAction(this, () =>
+            actionChain.AddAction(this, ActionType.PlayerLocation_TeleportToAllegianceMansion, () =>
             {
                 IsBusy = false;
                 var endPos = new Position(Location);
@@ -528,7 +528,7 @@ namespace ACE.Server.WorldObjects
             actionChain.AddDelaySeconds(animLength);
 
             IsBusy = true;
-            actionChain.AddAction(this, () =>
+            actionChain.AddAction(this, ActionType.PlayerLocation_TeleportToPKArena, () =>
             {
                 IsBusy = false;
                 var endPos = new Position(Location);
@@ -612,7 +612,7 @@ namespace ACE.Server.WorldObjects
             actionChain.AddDelaySeconds(animLength);
 
             IsBusy = true;
-            actionChain.AddAction(this, () =>
+            actionChain.AddAction(this, ActionType.PlayerLocation_TeleportToPKLArena, () =>
             {
                 IsBusy = false;
                 var endPos = new Position(Location);
@@ -649,98 +649,9 @@ namespace ACE.Server.WorldObjects
 
         public DateTime LastTeleportTime;
 
-        /// <summary>
-        /// This is not thread-safe. Consider using WorldManager.ThreadSafeTeleport() instead if you're calling this from a multi-threaded subsection.
-        /// </summary>
-        public void Teleport(Position _newPosition, bool fromPortal = false)
-        {
-            var newPosition = new Position(_newPosition);
-            //newPosition.PositionZ += 0.005f;
-            newPosition.PositionZ += 0.005f * (ObjScale ?? 1.0f);
-
-            //Console.WriteLine($"{Name}.Teleport() - Sending to {newPosition.ToLOCString()}, From Portal {fromPortal}");
-
-            // Check currentFogColor set for player. If LandblockManager.GlobalFogColor is set, don't bother checking, dungeons didn't clear like this on retail worlds.
-            // if not clear, reset to clear before portaling in case portaling to dungeon (no current way to fast check unloaded landblock for IsDungeon or current FogColor)
-            // client doesn't respond to any change inside dungeons, and only queues for change if in dungeon, executing change upon next teleport
-            // so if we delay teleport long enough to ensure clear arrives before teleport, we don't get fog carrying over into dungeon.
-
-            if (currentFogColor.HasValue && currentFogColor != EnvironChangeType.Clear && !LandblockManager.GlobalFogColor.HasValue)
-            {
-                var delayTelport = new ActionChain();
-                delayTelport.AddAction(this, () => ClearFogColor());
-                delayTelport.AddDelaySeconds(1);
-                delayTelport.AddAction(this, () => WorldManager.ThreadSafeTeleport(this, _newPosition));
-
-                delayTelport.EnqueueChain();
-
-                return;
-            }
-
-            Teleporting = true;
-            LastTeleportTime = DateTime.UtcNow;
-            LastTeleportStartTimestamp = Time.GetUnixTime();
-
-            if (fromPortal)
-                LastPortalTeleportTimestamp = LastTeleportStartTimestamp;
 
 
-            // check for changing varation - and remove anything from knownobjects that is not in the new variation
-            try
-            {
-                HandleVariationChangeVisbilityCleanup(Location.Variation, newPosition.Variation);
-            }
-            catch (Exception e)
-            {
-                log.Warn(e.Message);
-            }
-            
-            Session.Network.EnqueueSend(new GameMessagePlayerTeleport(this));
 
-            // load quickly, but player can load into landblock before server is finished loading
-
-            // send a "fake" update position to get the client to start loading asap,
-            // also might fix some decal bugs
-            var prevLoc = Location;
-            Location = newPosition;
-            SendUpdatePosition();
-            Location = prevLoc;
-
-            DoTeleportPhysicsStateChanges();
-
-            // force out of hotspots
-            PhysicsObj.report_collision_end(true);
-
-            if (UnderLifestoneProtection)
-                LifestoneProtectionDispel();
-
-            HandlePreTeleportVisibility(newPosition);
-
-            UpdatePlayerPosition(new Position(newPosition), true);
-        }
-
-        public void HandleVariationChangeVisbilityCleanup(int? sourceVariation, int? destinationVariation)
-        {
-            var knownObjs = GetKnownObjects();
-            if (knownObjs == null)
-            {
-                return;
-            }
-            for (int i = 0; i < knownObjs.Count; i++)
-            {
-                var knownObj = knownObjs[i];
-                if (knownObj.PhysicsObj != null && knownObj.Location != null && knownObj.Location.Variation != destinationVariation)
-                {
-                    knownObj.PhysicsObj.ObjMaint.RemoveObject(PhysicsObj);
-
-                    if (knownObj is Player knownPlayer)
-                        knownPlayer.RemoveTrackedObject(this, false);
-
-                    ObjMaint.RemoveObject(knownObj.PhysicsObj);
-                    RemoveTrackedObject(knownObj, false);
-                }
-            }
-        }
 
         public void DoPreTeleportHide()
         {
@@ -748,31 +659,14 @@ namespace ACE.Server.WorldObjects
             PlayParticleEffect(PlayScript.Hide, Guid);
         }
 
-        public void DoTeleportPhysicsStateChanges()
-        {
-            var broadcastUpdate = false;
 
-            var oldHidden = Hidden.Value;
-            var oldIgnore = IgnoreCollisions.Value;
-            var oldReport = ReportCollisions.Value;
-
-            Hidden = true;
-            IgnoreCollisions = true;
-            ReportCollisions = false;
-
-            if (Hidden != oldHidden || IgnoreCollisions != oldIgnore || ReportCollisions != oldReport)
-                broadcastUpdate = true;
-
-            if (broadcastUpdate)
-                EnqueueBroadcastPhysicsState();
-        }
 
         /// <summary>
         /// Prevent message spam
         /// </summary>
         public double? LastPortalTeleportTimestampError;
 
-        public void OnTeleportComplete()
+        public override void OnTeleportComplete()
         {
 
             int nonexemptCount = 0;
@@ -804,24 +698,16 @@ namespace ACE.Server.WorldObjects
                 // We'll check periodically to see when it's safe to let them materialize in
                 var actionChain = new ActionChain();
                 actionChain.AddDelaySeconds(0.1);
-                actionChain.AddAction(this, OnTeleportComplete);
+                actionChain.AddAction(this, ActionType.PlayerLocation_OnTeleportComplete, OnTeleportComplete);
                 actionChain.EnqueueChain();
                 return;
             }
 
-            // set materialize physics state
-            // this takes the player from pink bubbles -> fully materialized
-            if (CloakStatus != CloakStatus.On)
-                ReportCollisions = true;
-
-            IgnoreCollisions = false;
-            Hidden = false;
-            Teleporting = false;
+            // Call base to handle common cleanup (IgnoreCollisions, Hidden, Teleporting, Broadcast)
+            base.OnTeleportComplete();
             
             CheckMonsters();
             CheckHouse();
-
-            EnqueueBroadcastPhysicsState();
 
             // hijacking this for both start/end on portal teleport
             if (LastTeleportStartTimestamp == LastPortalTeleportTimestamp)
@@ -912,6 +798,7 @@ namespace ACE.Server.WorldObjects
             0x5964,     // Gauntlet Arena One (Radiant Blood)
             0x5965,     // Gauntlet Arena Two (Radiant Blood)
             0x79E9,     // Bloodstone Factory
+            0x654C,
         };
 
         /// <summary>

@@ -369,6 +369,9 @@ namespace ACE.Server
             log.Info("Initializing EventManager...");
             EventManager.Initialize();
 
+            log.Info("Initializing EventScheduler...");
+            EventScheduler.Initialize();
+
             if (ConfigManager.Config.Server.Network.ContentPort.HasValue)
             {
                 log.Info("Initializing Content Service Manager...");

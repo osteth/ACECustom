@@ -553,6 +553,8 @@ namespace ACE.Server.Managers
 
             HouseManager.Tick();
 
+            EventScheduler.Tick();
+
             ServerPerformanceMonitor.RegisterEventEnd(ServerPerformanceMonitor.MonitorType.UpdateGameWorld_Entire);
             ServerPerformanceMonitor.RegisterCumulativeEvents();
 

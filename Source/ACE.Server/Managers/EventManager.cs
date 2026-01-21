@@ -173,5 +173,96 @@ namespace ACE.Server.Managers
             var eventName = eventFormat.Substring(0, idx);
             return eventName;
         }
+
+        /// <summary>
+        /// Enables an event (sets state to Enabled in database, persists across restarts)
+        /// </summary>
+        public static bool EnableEvent(string e, WorldObject source, WorldObject target)
+        {
+            var eventName = GetEventName(e);
+
+            if (eventName.Equals("EventIsPKWorld", StringComparison.OrdinalIgnoreCase)) // special event
+                return false;
+
+            if (!Events.TryGetValue(eventName, out Event evnt))
+                return false;
+
+            var prevState = (GameEventState)evnt.State;
+
+            // Save to database
+            if (!Database.DatabaseManager.World.SaveEventState(eventName, (int)GameEventState.Enabled))
+                return false;
+
+            // Update in-memory state
+            evnt.State = (int)GameEventState.Enabled;
+
+            if (Debug)
+                Console.WriteLine($"Enabling event {evnt.Name}");
+
+            log.Debug($"[EVENT] {(source == null ? "SYSTEM" : $"{source.Name} (0x{source.Guid}|{source.WeenieClassId})")}{(target == null ? "" : $", triggered by {target.Name} (0x{target.Guid}|{target.WeenieClassId}),")} enabled an event: {evnt.Name} (previous state: {prevState})");
+
+            return true;
+        }
+
+        /// <summary>
+        /// Disables an event (sets state to Disabled in database, persists across restarts)
+        /// </summary>
+        public static bool DisableEvent(string e, WorldObject source, WorldObject target)
+        {
+            var eventName = GetEventName(e);
+
+            if (eventName.Equals("EventIsPKWorld", StringComparison.OrdinalIgnoreCase)) // special event
+                return false;
+
+            if (!Events.TryGetValue(eventName, out Event evnt))
+                return false;
+
+            var prevState = (GameEventState)evnt.State;
+
+            // Stop event if currently running
+            if (prevState == GameEventState.On)
+            {
+                evnt.State = (int)GameEventState.Off;
+            }
+
+            // Save to database
+            if (!Database.DatabaseManager.World.SaveEventState(eventName, (int)GameEventState.Disabled))
+                return false;
+
+            // Update in-memory state
+            evnt.State = (int)GameEventState.Disabled;
+
+            if (Debug)
+                Console.WriteLine($"Disabling event {evnt.Name}");
+
+            log.Debug($"[EVENT] {(source == null ? "SYSTEM" : $"{source.Name} (0x{source.Guid}|{source.WeenieClassId})")}{(target == null ? "" : $", triggered by {target.Name} (0x{target.Guid}|{target.WeenieClassId}),")} disabled an event: {evnt.Name} (previous state: {prevState})");
+
+            return true;
+        }
+
+        /// <summary>
+        /// Reloads the event cache from the database
+        /// </summary>
+        public static void ReloadEventCache()
+        {
+            log.Info("[EVENT] Reloading event cache from database...");
+
+            // Clear current cache
+            Events.Clear();
+
+            // Reload from database
+            var events = Database.DatabaseManager.World.GetAllEvents();
+
+            foreach (var evnt in events)
+            {
+                Events.Add(evnt.Name, evnt);
+
+                // Start events that have state On in database
+                if (evnt.State == (int)GameEventState.On)
+                    StartEvent(evnt.Name, null, null);
+            }
+
+            log.Info($"[EVENT] Event cache reloaded. {Events.Count} events loaded.");
+        }
     }
 }

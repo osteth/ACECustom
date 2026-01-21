@@ -607,6 +607,49 @@ namespace ACE.Database
             }
         }
 
+        /// <summary>
+        /// Saves the event state to the database and updates the cache
+        /// </summary>
+        public bool SaveEventState(string eventName, int state)
+        {
+            var nameToLower = eventName.ToLower();
+
+            using (var context = new WorldDbContext())
+            {
+                var evnt = context.Event
+                    .FirstOrDefault(r => r.Name.ToLower() == nameToLower);
+
+                if (evnt == null)
+                    return false;
+
+                evnt.State = state;
+                evnt.LastModified = DateTime.UtcNow;
+
+                try
+                {
+                    context.SaveChanges();
+
+                    // Update cache
+                    if (cachedEvents.TryGetValue(nameToLower, out var cachedEvent))
+                    {
+                        cachedEvent.State = state;
+                        cachedEvent.LastModified = evnt.LastModified;
+                    }
+                    else
+                    {
+                        cachedEvents[nameToLower] = evnt;
+                    }
+
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    // Log error if needed
+                    return false;
+                }
+            }
+        }
+
         public bool ClearCachedEvent(string eventName)
         {
             return cachedEvents.TryRemove(eventName.ToLower(), out _);

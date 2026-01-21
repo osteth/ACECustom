@@ -4699,15 +4699,56 @@ namespace ACE.Server.Command.Handlers
                         CommandHandlerHelper.WriteOutputInfo(session, $"Unable to stop event named {eventName} .", ChatMessageType.Broadcast);
                     break;
                 case "disable":
+                    if (EventManager.DisableEvent(eventName, session?.Player, null))
+                    {
+                        CommandHandlerHelper.WriteOutputInfo(session, $"Event {eventName} disabled successfully (will persist across restarts).", ChatMessageType.Broadcast);
+                        PlayerManager.BroadcastToAuditChannel(session?.Player, $"{(session != null ? session.Player.Name : "CONSOLE")} has disabled event {eventName}.");
+                    }
+                    else
+                        CommandHandlerHelper.WriteOutputInfo(session, $"Unable to disable event named {eventName}.", ChatMessageType.Broadcast);
                     break;
                 case "enable":
+                    if (EventManager.EnableEvent(eventName, session?.Player, null))
+                    {
+                        CommandHandlerHelper.WriteOutputInfo(session, $"Event {eventName} enabled successfully (will persist across restarts).", ChatMessageType.Broadcast);
+                        PlayerManager.BroadcastToAuditChannel(session?.Player, $"{(session != null ? session.Player.Name : "CONSOLE")} has enabled event {eventName}.");
+                    }
+                    else
+                        CommandHandlerHelper.WriteOutputInfo(session, $"Unable to enable event named {eventName}.", ChatMessageType.Broadcast);
                     break;
                 case "clear":
+                    // Reload event cache from database (like other cache clear commands)
+                    EventManager.ReloadEventCache();
+                    CommandHandlerHelper.WriteOutputInfo(session, "Event cache reloaded from database.", ChatMessageType.Broadcast);
+                    PlayerManager.BroadcastToAuditChannel(session?.Player, $"{(session != null ? session.Player.Name : "CONSOLE")} has reloaded the event cache.");
                     break;
                 case "status":
-                    if (eventName != "all" && eventName != "")
+                    if (eventName == null || eventName.Equals("all", StringComparison.OrdinalIgnoreCase))
                     {
-                        CommandHandlerHelper.WriteOutputInfo(session, $"Event {eventName} - GameEventState.{EventManager.GetEventStatus(eventName)}", ChatMessageType.Broadcast);
+                        var statusList = new List<string>();
+                        foreach (var evnt in EventManager.Events.Values.OrderBy(e => e.Name))
+                        {
+                            statusList.Add($"{evnt.Name}: {(GameEventState)evnt.State}");
+                        }
+                        CommandHandlerHelper.WriteOutputInfo(session, $"All Events:\n{string.Join("\n", statusList)}", ChatMessageType.Broadcast);
+                    }
+                    else if (eventName != "")
+                    {
+                        // Check if it's a specific event or substring search
+                        var matchingEvents = EventManager.Events.Values
+                            .Where(e => e.Name.Contains(eventName, StringComparison.OrdinalIgnoreCase))
+                            .OrderBy(e => e.Name)
+                            .ToList();
+                        
+                        if (matchingEvents.Count == 0)
+                        {
+                            CommandHandlerHelper.WriteOutputInfo(session, $"No events found matching '{eventName}'.", ChatMessageType.Broadcast);
+                        }
+                        else
+                        {
+                            var statusList = matchingEvents.Select(e => $"{e.Name}: {(GameEventState)e.State}");
+                            CommandHandlerHelper.WriteOutputInfo(session, $"Matching Events:\n{string.Join("\n", statusList)}", ChatMessageType.Broadcast);
+                        }
                     }
                     break;
                 default:
